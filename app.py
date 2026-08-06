@@ -317,7 +317,6 @@ elif menu_selection == "🔌 Simulasi Yanbung":
         valid_loc_df['Jarak_KM'] = c * r
         valid_loc_df['Jarak_Meter'] = (valid_loc_df['Jarak_KM'] * 1000).round(1)
         
-        # Urutkan berdasarkan jarak terdekat dan ambil 3 teratas
         nearest_traframes = valid_loc_df.sort_values(by='Jarak_KM').head(3)
         
         st.markdown("#### 📍 Rekomendasi 3 Trafo Terdekat dari Lokasi Survei:")
@@ -353,7 +352,6 @@ elif menu_selection == "🔌 Simulasi Yanbung":
     with col_input4:
         target_jalur = st.radio("Pilih Jalur JTR", ["1", "2", "3"], horizontal=True)
 
-    # Mengambil data menggunakan TF_Code
     trafo_data = df[df['TF_Code'] == selected_code].iloc[0]
     selected_trafo = trafo_data.get('TF_Name', 'Unknown') 
     
@@ -421,7 +419,6 @@ elif menu_selection == "🔌 Simulasi Yanbung":
             
         st.table(amp_df.style.apply(highlight_jalur, axis=0))
         
-        # --- TOMBOL SAVE KE RAW_MEA (MENGUPDATE KOLOM ALA) ---
         st.markdown("---")
         if st.button("💾 Simpan Prediksi", type="primary", use_container_width=True):
             with st.spinner("Menyimpan penambahan beban ke database..."):
@@ -484,13 +481,12 @@ elif menu_selection == "📋 Data Semua Trafo":
     """, unsafe_allow_html=True)
     
     st.info("Menampilkan seluruh data gabungan. 💡 Klik pada baris mana saja untuk menyorot (highlight) data tersebut.")
-    
-    # Tambahkan parameter selection_mode dan on_select untuk mengaktifkan highlight
+
     st.dataframe(
         df,  
         use_container_width=True,
-        selection_mode="single-row", # Mengaktifkan mode seleksi baris (ubah ke "multi-row" jika ingin bisa klik banyak baris)
-        on_select="rerun"           # "ignore" berarti kita hanya butuh efek visualnya saja tanpa men-trigger fungsi Python lain
+        selection_mode="single-row",
+        on_select="rerun"
     )
     st.markdown("---")
 
@@ -593,8 +589,7 @@ elif menu_selection == "✏️ Edit Data Trafo":
 # PAGE 5: INPUT PENGUKURAN GARDU (UPLOAD PDF)
 # ==========================================
 elif menu_selection == "📥 Input Pengukuran Gardu":
-    import bot_hioki # Pastikan modul ini ter-import
-    from datetime import timedelta # Pastikan ini ada jika menggunakan timedelta, atau pakai step=1800
+    from datetime import timedelta
     
     st.markdown("""
         <h2 style='font-size: 32px; margin-top: 0px; margin-bottom: 0px;'>📥 Input Laporan Pengukuran</h2>
@@ -602,8 +597,7 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
     """, unsafe_allow_html=True)
     
     st.info("Pilih gardu, tentukan waktu pengukuran, dan unggah file PDF Hioki. File akan diekstrak oleh AI dan otomatis terkirim di database.")
-    
-# 1. PEMILIHAN GARDU
+
     valid_df = df.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
     trafo_mapping = dict(zip(valid_df['TF_Code'], valid_df['TF_Name']))
     
@@ -622,12 +616,10 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
     if selected_code_from_dropdown != "-- Pilih Gardu --":
         selected_code = selected_code_from_dropdown
         current_data = df[df['TF_Code'] == selected_code].iloc[0]
-        
-    # 2. INPUT WAKTU & FORM UPLOAD
+    
     if selected_code:
         st.markdown(f"### 📄 Upload Dokumen untuk: **{current_data.get('TF_Name', '')} ({selected_code})**")
-        
-        # Penambahan Input Manual Tanggal dan Waktu
+
         col_waktu1, col_waktu2 = st.columns(2)
         with col_waktu1:
             input_tanggal = st.date_input("Tanggal Pengukuran di Lapangan")
@@ -640,7 +632,6 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
             if st.button("📤 Ekstrak & Proses Laporan", type="primary"):
                 with st.spinner("Membaca file PDF dan menjalankan AI..."):
                     try:
-                        # Kita langsung by-pass Google Drive Upload dan langsung mengekstrak data!
                         status_ok, pesan = bot_hioki.proses_pdf_ke_sheets(
                             file_bytes=uploaded_file.getvalue(), 
                             tf_code=selected_code, 
@@ -650,7 +641,7 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                         
                         if status_ok:
                             st.success(f"✅ Selesai! {pesan}")
-                            load_data.clear() # Segarkan cache dashboard
+                            load_data.clear()
                         else:
                             st.error(f"❌ Ekstraksi Gagal: {pesan}")
                             
@@ -672,7 +663,6 @@ elif menu_selection == "📈 Riwayat Trafo":
     
     st.info("Pilih gardu untuk melacak lokasi, kapasitas, tren grafik pengukuran, dan riwayat tabel secara lengkap.")
 
-    # 1. Bikin Cache Data Khusus Riwayat (Tanpa Drop Duplicates)
     @st.cache_data(ttl=60)
     def load_history_data():
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -687,10 +677,8 @@ elif menu_selection == "📈 Riwayat Trafo":
         df_hist = df_hist.dropna(subset=['TF_Name'])
         return df_hist
 
-    with st.spinner("Memuat data riwayat..."):
-        df_history = load_history_data()
+    df_history = load_history_data()
 
-    # 2. Selector Gardu
     valid_df = df_history.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
     trafo_mapping = dict(zip(valid_df['TF_Code'], valid_df['TF_Name']))
     
@@ -700,41 +688,34 @@ elif menu_selection == "📈 Riwayat Trafo":
     selected_code = st.selectbox("🔍 Pilih Transformator:", ["-- Pilih Gardu --"] + list(trafo_mapping.keys()), format_func=lambda x: format_trafo(x) if x != "-- Pilih Gardu --" else x)
 
     if selected_code != "-- Pilih Gardu --":
-        # 3. Filter & Kalkulasi Ulang KHUSUS untuk trafo yang dipilih (agar web tetap ringan)
         hist_trafo = df_history[df_history['TF_Code'] == selected_code].copy()
-        hist_trafo = hist_trafo.dropna(subset=['Date']) # Buang baris jika belum pernah diukur
+        hist_trafo = hist_trafo.dropna(subset=['Date'])
         
         if hist_trafo.empty:
             st.warning("⚠️ Gardu ini belum memiliki riwayat pengukuran di lapangan.")
         else:
-            # Urutkan secara kronologis
             hist_trafo['Parsed_Date_Temp'] = pd.to_datetime(hist_trafo['Date'].astype(str) + ' ' + hist_trafo['Time'].astype(str), errors='coerce')
             hist_trafo = hist_trafo.sort_values(by='Parsed_Date_Temp', ascending=True)
             hist_trafo['Tanggal & Waktu'] = hist_trafo['Date'].astype(str) + " | " + hist_trafo['Time'].astype(str)
 
-            # Ekstrak Koordinat
             if 'TF_Coordinate' in hist_trafo.columns:
                 coords = hist_trafo['TF_Coordinate'].str.split(',', expand=True)
                 hist_trafo['latitude'] = pd.to_numeric(coords[0], errors='coerce')
                 hist_trafo['longitude'] = pd.to_numeric(coords[1], errors='coerce')
                 
-            # Konversi tipe data
             cols_num = ['A_R_P', 'A_S_P', 'A_T_P', 'V_RN', 'V_SN', 'V_TN', 'TF_MLoad', 'THD_R_P', 'H1_R_P', 'THD_S_P', 'H1_S_P', 'THD_T_P', 'H1_T_P']
             for c in cols_num:
                 if c in hist_trafo.columns:
                     hist_trafo[c] = pd.to_numeric(hist_trafo[c], errors='coerce').fillna(0)
 
-            # Kalkulasi Unbalance
             hist_trafo['Avg_Current'] = (hist_trafo['A_R_P'] + hist_trafo['A_S_P'] + hist_trafo['A_T_P']) / 3
             hist_trafo['Max_Dev'] = hist_trafo[['A_R_P', 'A_S_P', 'A_T_P']].sub(hist_trafo['Avg_Current'], axis=0).abs().max(axis=1)
             hist_trafo['Unbalance (%)'] = np.where(hist_trafo['Avg_Current'] == 0, 0, (hist_trafo['Max_Dev'] / hist_trafo['Avg_Current']) * 100).round(2)
             
-            # Kalkulasi Load
             hist_trafo['Current Load'] = ((hist_trafo['V_RN'] * hist_trafo['A_R_P']) + (hist_trafo['V_SN'] * hist_trafo['A_S_P']) + (hist_trafo['V_TN'] * hist_trafo['A_T_P'])) / 1000
             hist_trafo['Current Load'] = hist_trafo['Current Load'].round(1)
             hist_trafo['Load Percentage'] = np.where(hist_trafo['TF_MLoad'] > 0, (hist_trafo['Current Load'] / hist_trafo['TF_MLoad']) * 100, 0).round(1)
 
-            # Kalkulasi Health
             hist_trafo['H1_Total'] = hist_trafo['H1_R_P'] + hist_trafo['H1_S_P'] + hist_trafo['H1_T_P']
             hist_trafo['Weighted_THD'] = np.where(
                 hist_trafo['H1_Total'] > 0,
@@ -742,7 +723,6 @@ elif menu_selection == "📈 Riwayat Trafo":
             calculated_health = 100 - ((hist_trafo['Weighted_THD'] - 5).clip(lower=0) * 1.5)
             hist_trafo['Health Score'] = np.clip(calculated_health, 0, 100).fillna(100).astype(int)
 
-            # --- 4. TAMPILAN MAP & INFO GARDU ---
             col_info1, col_info2 = st.columns([1, 2])
             with col_info1:
                 st.markdown(f"### ℹ️ Info Dasar")
@@ -757,7 +737,6 @@ elif menu_selection == "📈 Riwayat Trafo":
                     
             st.markdown("---")
 
-            # --- 5. TAMPILAN GRAFIK (CHART) ---
             st.markdown("### 📈 Grafik Tren Riwayat")
             chart_type = st.radio("Pilih parameter yang ingin dianalisis:", 
                                   ["⚡ Beban Trafo (Load %)", "⚖️ Ketidakseimbangan (Unbalance %)", "🏥 Kesehatan (Health Score)"], 
@@ -780,13 +759,10 @@ elif menu_selection == "📈 Riwayat Trafo":
 
             st.markdown("---")
             
-            # --- 6. TAMPILAN TABEL ---
             st.markdown("### 📋 Tabel Detail Pengukuran Historis")
             display_cols = ['Tanggal & Waktu', 'Current Load', 'Load Percentage', 'Unbalance (%)', 'Health Score', 'V_RN', 'V_SN', 'V_TN', 'A_R_P', 'A_S_P', 'A_T_P']
             
-            # Filter hanya kolom yang benar-benar ada di dataframe untuk mencegah error
             display_cols = [c for c in display_cols if c in hist_trafo.columns]
             
-            # Tampilkan dari yang paling baru ke yang paling lama
             st.dataframe(hist_trafo[display_cols].sort_values(by='Tanggal & Waktu', ascending=False), use_container_width=True, hide_index=True)
     st.markdown("---")
