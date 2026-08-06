@@ -102,7 +102,7 @@ def load_data():
             0
         )
         df['Load Percentage'] = df['Load Percentage'].round(1)
-    # Perhitungan Health Trafo
+
     cols_to_check = ['THD_R_P', 'H1_R_P', 'THD_S_P', 'H1_S_P', 'THD_T_P', 'H1_T_P']
     for col in cols_to_check:
         if col in df.columns:
@@ -135,13 +135,11 @@ def load_data():
         'Time'
     ]
     
-    # Pastikan kolom utama ada di dataframe (mencegah error jika data kosong)
+
     front_cols = [col for col in front_cols if col in df.columns]
     
-    # 2. Ambil seluruh sisa kolom lainnya (data pengukuran, ALA, dsb.)
     remaining_cols = [col for col in df.columns if col not in front_cols]
     
-    # 3. Terapkan urutan baru ke dataframe
     df = df[front_cols + remaining_cols]
 
     return df
