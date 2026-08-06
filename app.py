@@ -161,9 +161,10 @@ with st.sidebar:
         options=[
             "📊 Dashboard Utama", 
             "🔌 Simulasi Yanbung", 
-            "📋 Data Semua Trafo", 
             "📥 Input Pengukuran Gardu",
-            "✏️ Edit Data Trafo"
+            "📈 Riwayat Trafo",
+            "✏️ Edit Data Trafo",
+            "📋 Data Semua Trafo"
         ],
         icons=['', '', '', '', ''],
         default_index=0,
@@ -296,9 +297,9 @@ elif menu_selection == "🔌 Simulasi Yanbung":
 
     col_coord1, col_coord2 = st.columns(2)
     with col_coord1:
-        survei_lat = st.number_input("Latitude Titik Survei", value=-8.1690, format="%.6f")
+        survei_lat = st.number_input("Latitude Titik Survei", value=-8.150000, format="%.6f")
     with col_coord2:
-        survei_lon = st.number_input("Longitude Titik Survei", value=127.7890, format="%.6f")
+        survei_lon = st.number_input("Longitude Titik Survei", value=127.790000, format="%.6f")
 
     if 'latitude' in df.columns and 'longitude' in df.columns:
         valid_loc_df = df.dropna(subset=['latitude', 'longitude', 'TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code']).copy()
@@ -470,6 +471,7 @@ elif menu_selection == "🔌 Simulasi Yanbung":
                         
                 except Exception as e:
                     st.error(f"Terjadi kesalahan saat menyambung ke Google Sheets: {e}")
+    st.markdown("---")
 
 # ==========================================
 # PAGE 3: DATA SEMUA TRAFO
@@ -490,6 +492,7 @@ elif menu_selection == "📋 Data Semua Trafo":
         selection_mode="single-row", # Mengaktifkan mode seleksi baris (ubah ke "multi-row" jika ingin bisa klik banyak baris)
         on_select="rerun"           # "ignore" berarti kita hanya butuh efek visualnya saja tanpa men-trigger fungsi Python lain
     )
+    st.markdown("---")
 
 # ==========================================
 # PAGE 4: EDIT DATA TRAFO (INFO_DATA)
@@ -503,25 +506,25 @@ elif menu_selection == "✏️ Edit Data Trafo":
     
     st.info("Cari gardu berdasarkan **Nomor (TF_Code)** atau **Nama (TF_Name)** untuk memperbarui data master pada database.")
     
-    # Membuat dua kolom untuk dua selector berdampingan
-    col_sel1, col_sel2 = st.columns(2)
+    # 1. PEMILIHAN GARDU
+    valid_df = df.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
+    trafo_mapping = dict(zip(valid_df['TF_Code'], valid_df['TF_Name']))
     
-    with col_sel1:
-        code_list = sorted(df['TF_Code'].dropna().unique())
-        selected_code_from_dropdown = st.selectbox("🔍 Cari Berdasarkan Nomor (TF_Code):", ["-- Pilih Kode --"] + list(code_list))
+    def format_trafo(code):
+        if code == "-- Pilih Gardu --":
+            return code
+        return f"{trafo_mapping[code]} ({code})"
         
-    with col_sel2:
-        name_list = sorted(df['TF_Name'].dropna().unique())
-        selected_name_from_dropdown = st.selectbox("🔍 Cari Berdasarkan Nama (TF_Name):", ["-- Pilih Nama --"] + list(name_list))
+    selected_code_from_dropdown = st.selectbox(
+        "🔍 Cari dan Pilih Gardu:", 
+        options=["-- Pilih Gardu --"] + list(trafo_mapping.keys()), 
+        format_func=format_trafo
+    )
     
-    # Menentukan gardu mana yang dipilih berdasarkan interaksi user (mana yang diubah dari default-nya)
     selected_code = None
-    if selected_code_from_dropdown != "-- Pilih Kode --":
+    if selected_code_from_dropdown != "-- Pilih Gardu --":
         selected_code = selected_code_from_dropdown
         current_data = df[df['TF_Code'] == selected_code].iloc[0]
-    elif selected_name_from_dropdown != "-- Pilih Nama --":
-        current_data = df[df['TF_Name'] == selected_name_from_dropdown].iloc[0]
-        selected_code = current_data.get('TF_Code')
     
     if selected_code:
         with st.form("form_edit_trafo"):
@@ -584,6 +587,7 @@ elif menu_selection == "✏️ Edit Data Trafo":
                     st.error(f"Terjadi kesalahan saat menyambung ke database: {e}")
     else:
         st.info("👆 Silakan pilih salah satu gardu melalui kotak pencarian **Nomor (TF_Code)** atau **Nama (TF_Name)** di atas untuk mulai mengedit.")
+    st.markdown("---")
 
 # ==========================================
 # PAGE 5: INPUT PENGUKURAN GARDU (UPLOAD PDF)
@@ -599,24 +603,25 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
     
     st.info("Pilih gardu, tentukan waktu pengukuran, dan unggah file PDF Hioki. File akan diekstrak oleh AI dan otomatis terkirim di database.")
     
-    # 1. PEMILIHAN GARDU
-    col_sel1, col_sel2 = st.columns(2)
+# 1. PEMILIHAN GARDU
+    valid_df = df.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
+    trafo_mapping = dict(zip(valid_df['TF_Code'], valid_df['TF_Name']))
     
-    with col_sel1:
-        code_list = sorted(df['TF_Code'].dropna().unique())
-        selected_code_from_dropdown = st.selectbox("🔍 Cari Berdasarkan Nomor (TF_Code):", ["-- Pilih Kode --"] + list(code_list))
+    def format_trafo(code):
+        if code == "-- Pilih Gardu --":
+            return code
+        return f"{trafo_mapping[code]} ({code})"
         
-    with col_sel2:
-        name_list = sorted(df['TF_Name'].dropna().unique())
-        selected_name_from_dropdown = st.selectbox("🔍 Cari Berdasarkan Nama (TF_Name):", ["-- Pilih Nama --"] + list(name_list))
+    selected_code_from_dropdown = st.selectbox(
+        "🔍 Cari dan Pilih Gardu:", 
+        options=["-- Pilih Gardu --"] + list(trafo_mapping.keys()), 
+        format_func=format_trafo
+    )
     
     selected_code = None
-    if selected_code_from_dropdown != "-- Pilih Kode --":
+    if selected_code_from_dropdown != "-- Pilih Gardu --":
         selected_code = selected_code_from_dropdown
         current_data = df[df['TF_Code'] == selected_code].iloc[0]
-    elif selected_name_from_dropdown != "-- Pilih Nama --":
-        current_data = df[df['TF_Name'] == selected_name_from_dropdown].iloc[0]
-        selected_code = current_data.get('TF_Code')
         
     # 2. INPUT WAKTU & FORM UPLOAD
     if selected_code:
@@ -653,3 +658,135 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                         st.error(f"❌ Terjadi kesalahan sistem: {e}")
     else:
         st.info("👆 Silakan pilih salah satu gardu terlebih dahulu.")
+    st.markdown("---")
+
+# ==========================================
+# PAGE 6: RIWAYAT PENGUKURAN TRAFO
+# ==========================================
+elif menu_selection == "📈 Riwayat Trafo":
+    
+    st.markdown("""
+        <h2 style='font-size: 32px; margin-top: 0px; margin-bottom: 0px;'>📈 Riwayat Pengukuran Gardu</h2>
+        <hr style='margin-top: 10px; margin-bottom: 15px; border: none; border-top: 1px solid rgba(128, 128, 128, 0.4);'>
+    """, unsafe_allow_html=True)
+    
+    st.info("Pilih gardu untuk melacak lokasi, kapasitas, tren grafik pengukuran, dan riwayat tabel secara lengkap.")
+
+    # 1. Bikin Cache Data Khusus Riwayat (Tanpa Drop Duplicates)
+    @st.cache_data(ttl=60)
+    def load_history_data():
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        gc = gspread.authorize(credentials)   
+        sh = gc.open("DATA TRAFO")
+        
+        raw_mea = pd.DataFrame(sh.worksheet("RAW_MEA").get_all_records())
+        info_data = pd.DataFrame(sh.worksheet("INFO_DATA").get_all_records())
+        
+        df_hist = pd.merge(raw_mea, info_data, on="TF_Code", how="right")
+        df_hist = df_hist.dropna(subset=['TF_Name'])
+        return df_hist
+
+    with st.spinner("Memuat data riwayat..."):
+        df_history = load_history_data()
+
+    # 2. Selector Gardu
+    valid_df = df_history.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
+    trafo_mapping = dict(zip(valid_df['TF_Code'], valid_df['TF_Name']))
+    
+    def format_trafo(code):
+        return f"{trafo_mapping[code]} ({code})"
+        
+    selected_code = st.selectbox("🔍 Pilih Transformator:", ["-- Pilih Gardu --"] + list(trafo_mapping.keys()), format_func=lambda x: format_trafo(x) if x != "-- Pilih Gardu --" else x)
+
+    if selected_code != "-- Pilih Gardu --":
+        # 3. Filter & Kalkulasi Ulang KHUSUS untuk trafo yang dipilih (agar web tetap ringan)
+        hist_trafo = df_history[df_history['TF_Code'] == selected_code].copy()
+        hist_trafo = hist_trafo.dropna(subset=['Date']) # Buang baris jika belum pernah diukur
+        
+        if hist_trafo.empty:
+            st.warning("⚠️ Gardu ini belum memiliki riwayat pengukuran di lapangan.")
+        else:
+            # Urutkan secara kronologis
+            hist_trafo['Parsed_Date_Temp'] = pd.to_datetime(hist_trafo['Date'].astype(str) + ' ' + hist_trafo['Time'].astype(str), errors='coerce')
+            hist_trafo = hist_trafo.sort_values(by='Parsed_Date_Temp', ascending=True)
+            hist_trafo['Tanggal & Waktu'] = hist_trafo['Date'].astype(str) + " | " + hist_trafo['Time'].astype(str)
+
+            # Ekstrak Koordinat
+            if 'TF_Coordinate' in hist_trafo.columns:
+                coords = hist_trafo['TF_Coordinate'].str.split(',', expand=True)
+                hist_trafo['latitude'] = pd.to_numeric(coords[0], errors='coerce')
+                hist_trafo['longitude'] = pd.to_numeric(coords[1], errors='coerce')
+                
+            # Konversi tipe data
+            cols_num = ['A_R_P', 'A_S_P', 'A_T_P', 'V_RN', 'V_SN', 'V_TN', 'TF_MLoad', 'THD_R_P', 'H1_R_P', 'THD_S_P', 'H1_S_P', 'THD_T_P', 'H1_T_P']
+            for c in cols_num:
+                if c in hist_trafo.columns:
+                    hist_trafo[c] = pd.to_numeric(hist_trafo[c], errors='coerce').fillna(0)
+
+            # Kalkulasi Unbalance
+            hist_trafo['Avg_Current'] = (hist_trafo['A_R_P'] + hist_trafo['A_S_P'] + hist_trafo['A_T_P']) / 3
+            hist_trafo['Max_Dev'] = hist_trafo[['A_R_P', 'A_S_P', 'A_T_P']].sub(hist_trafo['Avg_Current'], axis=0).abs().max(axis=1)
+            hist_trafo['Unbalance (%)'] = np.where(hist_trafo['Avg_Current'] == 0, 0, (hist_trafo['Max_Dev'] / hist_trafo['Avg_Current']) * 100).round(2)
+            
+            # Kalkulasi Load
+            hist_trafo['Current Load'] = ((hist_trafo['V_RN'] * hist_trafo['A_R_P']) + (hist_trafo['V_SN'] * hist_trafo['A_S_P']) + (hist_trafo['V_TN'] * hist_trafo['A_T_P'])) / 1000
+            hist_trafo['Current Load'] = hist_trafo['Current Load'].round(1)
+            hist_trafo['Load Percentage'] = np.where(hist_trafo['TF_MLoad'] > 0, (hist_trafo['Current Load'] / hist_trafo['TF_MLoad']) * 100, 0).round(1)
+
+            # Kalkulasi Health
+            hist_trafo['H1_Total'] = hist_trafo['H1_R_P'] + hist_trafo['H1_S_P'] + hist_trafo['H1_T_P']
+            hist_trafo['Weighted_THD'] = np.where(
+                hist_trafo['H1_Total'] > 0,
+                ((hist_trafo['THD_R_P'] * hist_trafo['H1_R_P']) + (hist_trafo['THD_S_P'] * hist_trafo['H1_S_P']) + (hist_trafo['THD_T_P'] * hist_trafo['H1_T_P'])) / hist_trafo['H1_Total'], 0)
+            calculated_health = 100 - ((hist_trafo['Weighted_THD'] - 5).clip(lower=0) * 1.5)
+            hist_trafo['Health Score'] = np.clip(calculated_health, 0, 100).fillna(100).astype(int)
+
+            # --- 4. TAMPILAN MAP & INFO GARDU ---
+            col_info1, col_info2 = st.columns([1, 2])
+            with col_info1:
+                st.markdown(f"### ℹ️ Info Dasar")
+                st.metric("Nama Gardu", hist_trafo.iloc[0].get('TF_Name', '-'))
+                st.metric("Kapasitas (Max Load)", f"{hist_trafo.iloc[0].get('TF_MLoad', 0)} kVA")
+                st.metric("Total Kunjungan Ukur", f"{len(hist_trafo)} Kali")
+            with col_info2:
+                st.markdown(f"### 📍 Lokasi Gardu")
+                if 'latitude' in hist_trafo.columns and 'longitude' in hist_trafo.columns:
+                    map_df = hist_trafo[['latitude', 'longitude']].dropna().head(1)
+                    st.map(map_df, height=230)
+                    
+            st.markdown("---")
+
+            # --- 5. TAMPILAN GRAFIK (CHART) ---
+            st.markdown("### 📈 Grafik Tren Riwayat")
+            chart_type = st.radio("Pilih parameter yang ingin dianalisis:", 
+                                  ["⚡ Beban Trafo (Load %)", "⚖️ Ketidakseimbangan (Unbalance %)", "🏥 Kesehatan (Health Score)"], 
+                                  horizontal=True)
+            
+            if chart_type == "⚡ Beban Trafo (Load %)":
+                fig = px.line(hist_trafo, x='Tanggal & Waktu', y='Load Percentage', markers=True, text='Load Percentage')
+                fig.update_traces(line_color='#FF4B4B', textposition="top center")
+                fig.update_layout(yaxis_title="Persentase Beban (%)")
+            elif chart_type == "⚖️ Ketidakseimbangan (Unbalance %)":
+                fig = px.line(hist_trafo, x='Tanggal & Waktu', y='Unbalance (%)', markers=True, text='Unbalance (%)')
+                fig.update_traces(line_color='#FFA500', textposition="top center")
+                fig.update_layout(yaxis_title="Unbalance Fasa (%)")
+            else:
+                fig = px.line(hist_trafo, x='Tanggal & Waktu', y='Health Score', markers=True, text='Health Score')
+                fig.update_traces(line_color='#2ECC71', textposition="top center")
+                fig.update_layout(yaxis_title="Skor Kesehatan (0-100)", yaxis=dict(range=[0, 110]))
+                
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("---")
+            
+            # --- 6. TAMPILAN TABEL ---
+            st.markdown("### 📋 Tabel Detail Pengukuran Historis")
+            display_cols = ['Tanggal & Waktu', 'Current Load', 'Load Percentage', 'Unbalance (%)', 'Health Score', 'V_RN', 'V_SN', 'V_TN', 'A_R_P', 'A_S_P', 'A_T_P']
+            
+            # Filter hanya kolom yang benar-benar ada di dataframe untuk mencegah error
+            display_cols = [c for c in display_cols if c in hist_trafo.columns]
+            
+            # Tampilkan dari yang paling baru ke yang paling lama
+            st.dataframe(hist_trafo[display_cols].sort_values(by='Tanggal & Waktu', ascending=False), use_container_width=True, hide_index=True)
+    st.markdown("---")
