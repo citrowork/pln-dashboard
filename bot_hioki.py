@@ -6,12 +6,20 @@ import io
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
+import os
+
 # ==========================================
 # 1. PENGATURAN API & KREDENSIAL
 # ==========================================
-# Kredensial Gemini API (Sebaiknya gunakan st.secrets di produksi)
-genai.configure(api_key=st.secrets["gemini_api_key"])
-model = genai.GenerativeModel('gemini-3.1-flash-lite')
+gemini_key = ""
+if "gemini_api_key" in st.secrets:
+    gemini_key = st.secrets["gemini_api_key"]
+elif "GEMINI_API_KEY" in os.environ:
+    gemini_key = os.environ["GEMINI_API_KEY"]
+
+if gemini_key:
+    genai.configure(api_key=gemini_key)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def proses_pdf_ke_sheets(file_bytes, tf_code, tanggal, waktu):
     """
@@ -21,7 +29,12 @@ def proses_pdf_ke_sheets(file_bytes, tf_code, tanggal, waktu):
     try:
         # A. Setup Google Sheets Autentikasi
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        if "gcp_service_account" in st.secrets:
+            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        elif os.path.exists("credentials.json"):
+            creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+        else:
+            raise FileNotFoundError("Credentials Google Cloud tidak ditemukan.")
         gc = gspread.authorize(creds)
         
         # Buka RAW_MEA

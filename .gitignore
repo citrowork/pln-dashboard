@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit secrets (DO NOT COMMIT SECRETS TO GIT)
+.streamlit/secrets.toml
+
+# Google Cloud credentials (DO NOT COMMIT SERVICE ACCOUNT KEYS)
+credentials.json
+*.json_backup
+
+# Environment files
+.env
+.venv/
+env/
+venv/
