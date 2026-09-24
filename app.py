@@ -802,6 +802,7 @@ if menu_selection == "📊 Dashboard Utama":
         try:
             hover_dict = {
                 'TF_Code': True,
+                'TF_Unit': True,
                 'TF_MLoad': True,
                 'Load Percentage': True,
                 'Unbalance (%)': True,
@@ -1090,7 +1091,7 @@ if menu_selection == "📊 Dashboard Utama":
             'Kode Gardu': tab_queue['TF_Code'],
             'Nama Gardu': tab_queue['TF_Name'],
             'Kapasitas': tab_queue['TF_MLoad'].apply(lambda x: f"{x:.0f} kVA"),
-            'Fasa / Konstruksi': tab_queue['TF_Phase'].astype(str) + " Fasa • " + tab_queue['TF_Construction'].fillna('-'),
+            'TF_Unit': tab_queue.get('TF_Unit', pd.Series('-')).fillna('-'),
             'Tanggal Ukur Terakhir': tab_queue['Date'].fillna('Belum Pernah Diukur'),
             'Usia Pengukuran': tab_queue.apply(
                 lambda r: f"🟣 {r['Months_Since_Measurement']:.1f} bln lalu (Lewat {(r['Months_Since_Measurement']-6):.1f} bln)" 
@@ -1109,6 +1110,7 @@ if menu_selection == "📊 Dashboard Utama":
         export_queue = pd.DataFrame({
             'Kode Gardu': tab_queue['TF_Code'],
             'Nama Gardu': tab_queue['TF_Name'],
+            'TF_Unit': tab_queue.get('TF_Unit', pd.Series('-')).fillna('-'),
             'Kapasitas (kVA)': tab_queue['TF_MLoad'],
             'Fasa': tab_queue['TF_Phase'].astype(str) + " Fasa",
             'Konstruksi': tab_queue['TF_Construction'].fillna('-'),
@@ -1449,12 +1451,12 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                         {static_info['TF_Name']} <span style='font-size:16px; color:#64748B;'>({selected_code})</span>
                     </div>
                     <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; font-size: 13px;'>
+                        <div><b>Unit Layanan:</b> {static_info.get('TF_Unit', '-')}</div>
                         <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
                         <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
                         <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
                         <div><b>Beban Terakhir:</b> {static_info.get('Load Percentage', '-')}%</div>
                         <div><b>Unbalance:</b> {static_info.get('Unbalance (%)', '-')}%</div>
-                        <div><b>Skor Kesehatan:</b> {static_info.get('Health Score', '-')}/100</div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
@@ -1585,17 +1587,20 @@ elif menu_selection == "📋 Data Semua Trafo":
 
     # Multi-Filter Controls
     with st.expander("🔍 Filter Data & Pencarian Lanjutan", expanded=True):
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
         
         with col_f1:
             search_query = st.text_input("Cari Kode / Nama Gardu", placeholder="Contoh: MOA001 atau PASAR")
         with col_f2:
+            unit_choices = ["Semua"] + sorted([str(u) for u in df['TF_Unit'].dropna().unique()]) if 'TF_Unit' in df.columns else ["Semua"]
+            sel_unit = st.selectbox("Unit Layanan (TF_Unit)", unit_choices)
+        with col_f3:
             const_choices = ["Semua"] + list(df['TF_Construction'].dropna().unique())
             sel_const = st.selectbox("Jenis Konstruksi", const_choices)
-        with col_f3:
+        with col_f4:
             load_choices = ["Semua", "Overload (>80%)", "Normal (40-80%)", "Underload (<40%)", "Belum Diukur"]
             sel_load = st.selectbox("Status Beban", load_choices)
-        with col_f4:
+        with col_f5:
             mea_choices = ["Semua", "Terkini", "Perlu Ukur Ulang", "Belum Diukur"]
             sel_mea = st.selectbox("Status Pengukuran", mea_choices)
 
@@ -1606,6 +1611,8 @@ elif menu_selection == "📋 Data Semua Trafo":
             filtered_df['TF_Code'].str.contains(search_query, case=False, na=False) |
             filtered_df['TF_Name'].str.contains(search_query, case=False, na=False)
         ]
+    if 'TF_Unit' in filtered_df.columns and sel_unit != "Semua":
+        filtered_df = filtered_df[filtered_df['TF_Unit'] == sel_unit]
     if sel_const != "Semua":
         filtered_df = filtered_df[filtered_df['TF_Construction'] == sel_const]
     if sel_load != "Semua":
@@ -1625,7 +1632,7 @@ elif menu_selection == "📋 Data Semua Trafo":
 
     # Format Columns for Display
     show_cols = [
-        'TF_Code', 'TF_Name', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+        'TF_Code', 'TF_Name', 'TF_Unit', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
         'Measurement_Status', 'Load Percentage', 'Current Load', 'Unbalance (%)',
         'Health Score', 'Date', 'A_R_P', 'A_S_P', 'A_T_P', 'TF_Coordinate'
     ]
@@ -2003,6 +2010,7 @@ elif menu_selection == "✏️ Edit Data Trafo":
             with col_edit1:
                 st.text_input("Nomor / Kode Gardu (TF_Code)", value=selected_code, disabled=True)
                 new_name = st.text_input("Nama Gardu (TF_Name)", value=curr_data.get('TF_Name', ''))
+                new_unit = st.text_input("Unit Layanan (TF_Unit)", value=str(curr_data.get('TF_Unit', 'ULP MOA')))
                 curr_cap = float(curr_data.get('TF_MLoad', 50) or 50)
                 new_capacity = st.number_input("Kapasitas Pengenal / Max Load (kVA)", value=curr_cap, step=25.0)
 
@@ -2033,9 +2041,10 @@ elif menu_selection == "✏️ Edit Data Trafo":
                         row_idx = cell.row
                         sheet_info.update_cell(row_idx, 2, new_name)
                         sheet_info.update_cell(row_idx, 3, new_coordinate)
-                        sheet_info.update_cell(row_idx, 4, new_capacity)
-                        sheet_info.update_cell(row_idx, 5, new_phase)
-                        sheet_info.update_cell(row_idx, 6, new_construction)
+                        sheet_info.update_cell(row_idx, 4, new_unit)
+                        sheet_info.update_cell(row_idx, 5, new_capacity)
+                        sheet_info.update_cell(row_idx, 6, new_phase)
+                        sheet_info.update_cell(row_idx, 7, new_construction)
 
                         st.cache_data.clear()
                         st.success(f"✅ Profil Gardu '{new_name}' ({selected_code}) berhasil diperbarui!")
