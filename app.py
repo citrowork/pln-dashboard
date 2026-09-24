@@ -88,14 +88,38 @@ st.markdown("""
             pointer-events: auto !important;
         }
 
-        /* 4. Hide ONLY Deploy button, hamburger menu, and status widget */
+        /* 4. Hide Deploy button, Fork button, GitHub logo, Main Menu, and Status widget */
         [data-testid="stAppDeployButton"],
         [data-testid="stMainMenu"],
         [data-testid="stStatusWidget"],
+        [data-testid="stToolbarActions"],
+        .stToolbarActions,
+        [data-testid="stToolbarActionButton"],
+        [data-testid="stForkAppButton"],
+        header [data-testid="stToolbarActions"],
+        header a[href*="github.com"],
+        header a[href*="fork"],
+        header button[title*="Fork" i],
+        header button[aria-label*="Fork" i],
+        header a[title*="Fork" i],
+        header a[aria-label*="Fork" i],
+        header [title*="GitHub" i],
+        header [aria-label*="GitHub" i],
+        [data-testid="stToolbar"] a[href*="github.com"],
+        [data-testid="stToolbar"] a[href*="fork"],
+        [data-testid="stToolbar"] button[title*="Fork" i],
+        [data-testid="stToolbar"] [title*="GitHub" i],
+        [data-testid="manage-app-button"],
         .stAppDeployButton,
         #MainMenu {
             display: none !important;
             visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            width: 0px !important;
+            height: 0px !important;
+            margin: 0 !important;
+            padding: 0 !important;
         }
 
         /* 5. Hide the top colored decoration line */
