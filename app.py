@@ -724,15 +724,15 @@ if menu_selection == "📊 Dashboard Utama":
         # Define marker color based on condition (Red for unmeasured as prioritized risk)
         def get_map_status(row):
             if not row['Is_Measured']:
-                return '🔴 Belum Diukur'
+                return 'Belum Diukur'
             elif row['Load Percentage'] > 80:
-                return '🚨 Overload (>80%)'
+                return 'Overload (>80%)'
             elif row['Measurement_Status'] == 'Perlu Ukur Ulang':
-                return '🟣 Lewat 6 Bulan (>6 Bln SPLN)'
+                return 'Lewat 6 Bulan (>6 Bln SPLN)'
             elif row['Unbalance (%)'] > 20:
-                return '🟠 Unbalance Kritis (>20%)'
+                return 'Unbalance Kritis (>20%)'
             else:
-                return '🟢 Terkini & Normal'
+                return 'Terkini & Normal'
 
         map_df['Map_Status'] = map_df.apply(get_map_status, axis=1)
 
@@ -748,11 +748,11 @@ if menu_selection == "📊 Dashboard Utama":
 
         # Interactive Plotly Mapbox Color Map
         color_map = {
-            '🔴 Belum Diukur': '#EF4444',
-            '🚨 Overload (>80%)': '#991B1B',
-            '🟣 Lewat 6 Bulan (>6 Bln SPLN)': '#8B5CF6',
-            '🟠 Unbalance Kritis (>20%)': '#F59E0B',
-            '🟢 Terkini & Normal': '#10B981'
+            'Belum Diukur': '#EF4444',
+            'Overload (>80%)': '#991B1B',
+            'Lewat 6 Bulan (>6 Bln SPLN)': '#8B5CF6',
+            'Unbalance Kritis (>20%)': '#F59E0B',
+            'Terkini & Normal': '#10B981'
         }
 
         # Determine center and zoom coordinates based on chosen focus
@@ -805,6 +805,7 @@ if menu_selection == "📊 Dashboard Utama":
                         style="open-street-map"
                     ),
                     legend=dict(
+                        title_text="",
                         orientation="h",
                         yanchor="bottom",
                         y=0.02,
@@ -836,6 +837,7 @@ if menu_selection == "📊 Dashboard Utama":
                         style="open-street-map"
                     ),
                     legend=dict(
+                        title_text="",
                         orientation="h",
                         yanchor="bottom",
                         y=0.02,
