@@ -655,8 +655,8 @@ if menu_selection == "📊 Dashboard Utama":
                 <div class='kpi-title'>🔔 Pengukuran Trafo (SPLN)</div>
                 <div class='kpi-value'>{need_measurement_count} <span style='font-size:13px; font-weight:700; color:#DC2626;'>Perlu Ukur</span></div>
                 <div class='kpi-desc'>
-                    <span style='color: #DC2626; font-weight:700;'>⏳ {overdue_count} Lewat 6 Bln</span> • 
-                    <span style='color: #64748B;'>{unmeasured_count} Belum Diukur</span>
+                    <span style='color: #8B5CF6; font-weight:700;'>⏳ {overdue_count} Lewat 6 Bln</span> • 
+                    <span style='color: #EF4444; font-weight:700;'>🔴 {unmeasured_count} Belum Diukur</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -705,9 +705,9 @@ if menu_selection == "📊 Dashboard Utama":
             "Filter Status Peta:",
             [
                 "Semua Kondisi Gardu",
+                f"🔴 Belum Diukur ({unmeasured_count})",
                 f"⏳ Lewat 6 Bulan SPLN ({overdue_count})",
-                f"⚪ Belum Diukur ({unmeasured_count})",
-                f"🔴 Overload & Kritis ({overload_count + unbalanced_count})",
+                f"🚨 Overload & Kritis ({overload_count + unbalanced_count})",
                 f"🟢 Terkini & Patuh SPLN ({valid_spln_count})"
             ],
             index=0
@@ -721,14 +721,14 @@ if menu_selection == "📊 Dashboard Utama":
 
     map_df = df.dropna(subset=['latitude', 'longitude']).copy()
     if not map_df.empty:
-        # Define marker color based on condition
+        # Define marker color based on condition (Red for unmeasured as prioritized risk)
         def get_map_status(row):
             if not row['Is_Measured']:
-                return '⚪ Belum Diukur'
+                return '🔴 Belum Diukur'
+            elif row['Load Percentage'] > 80:
+                return '🚨 Overload (>80%)'
             elif row['Measurement_Status'] == 'Perlu Ukur Ulang':
                 return '🟣 Lewat 6 Bulan (>6 Bln SPLN)'
-            elif row['Load Percentage'] > 80:
-                return '🔴 Overload (>80%)'
             elif row['Unbalance (%)'] > 20:
                 return '🟠 Unbalance Kritis (>20%)'
             else:
@@ -746,13 +746,13 @@ if menu_selection == "📊 Dashboard Utama":
         elif "Terkini & Patuh SPLN" in pilihan_filter_peta:
             map_df = map_df[map_df['Measurement_Status'] == 'Terkini']
 
-        # Interactive Plotly Mapbox
+        # Interactive Plotly Mapbox Color Map
         color_map = {
-            '🔴 Overload (>80%)': '#EF4444',
-            '🟠 Unbalance Kritis (>20%)': '#F59E0B',
+            '🔴 Belum Diukur': '#EF4444',
+            '🚨 Overload (>80%)': '#991B1B',
             '🟣 Lewat 6 Bulan (>6 Bln SPLN)': '#8B5CF6',
-            '🟢 Terkini & Normal': '#10B981',
-            '⚪ Belum Diukur': '#94A3B8'
+            '🟠 Unbalance Kritis (>20%)': '#F59E0B',
+            '🟢 Terkini & Normal': '#10B981'
         }
 
         # Determine center and zoom coordinates based on chosen focus
@@ -796,6 +796,7 @@ if menu_selection == "📊 Dashboard Utama":
                     map_style="open-street-map",
                     height=450
                 )
+                fig_map.update_traces(marker=dict(size=9, opacity=0.9))
                 fig_map.update_layout(
                     margin=dict(l=0, r=0, t=0, b=0),
                     map=dict(
@@ -826,6 +827,7 @@ if menu_selection == "📊 Dashboard Utama":
                     mapbox_style="open-street-map",
                     height=450
                 )
+                fig_map.update_traces(marker=dict(size=9, opacity=0.9))
                 fig_map.update_layout(
                     margin=dict(l=0, r=0, t=0, b=0),
                     mapbox=dict(
@@ -1035,7 +1037,7 @@ if menu_selection == "📊 Dashboard Utama":
         with col_tab_f1:
             tab_spln_flt = st.radio(
                 "Filter Kategori:",
-                [f"Semua Perlu Ukur ({need_measurement_count})", f"🔴 Lewat 6 Bulan SPLN ({overdue_count} Unit)", f"⚪ Belum Pernah Diukur ({unmeasured_count} Unit)"],
+                [f"Semua Perlu Ukur ({need_measurement_count})", f"🟣 Lewat 6 Bulan SPLN ({overdue_count} Unit)", f"🔴 Belum Pernah Diukur ({unmeasured_count} Unit)"],
                 horizontal=True,
                 key="tab_spln_flt_radio"
             )
@@ -1059,13 +1061,13 @@ if menu_selection == "📊 Dashboard Utama":
             'Fasa / Konstruksi': tab_queue['TF_Phase'].astype(str) + " Fasa • " + tab_queue['TF_Construction'].fillna('-'),
             'Tanggal Ukur Terakhir': tab_queue['Date'].fillna('Belum Pernah Diukur'),
             'Usia Pengukuran': tab_queue.apply(
-                lambda r: f"🔴 {r['Months_Since_Measurement']:.1f} bln lalu (Lewat {(r['Months_Since_Measurement']-6):.1f} bln)" 
+                lambda r: f"🟣 {r['Months_Since_Measurement']:.1f} bln lalu (Lewat {(r['Months_Since_Measurement']-6):.1f} bln)" 
                 if r['Measurement_Status'] == 'Perlu Ukur Ulang' and pd.notna(r['Months_Since_Measurement']) 
-                else "⚪ Belum Pernah Diukur", axis=1
+                else "🔴 Belum Pernah Diukur", axis=1
             ),
             'Status SPLN': tab_queue['Measurement_Status'].map({
-                'Perlu Ukur Ulang': '🔴 Lewat 6 Bulan (Wajib Ukur)',
-                'Belum Diukur': '⚪ Belum Pernah Diukur'
+                'Perlu Ukur Ulang': '🟣 Lewat 6 Bulan (Wajib Ukur)',
+                'Belum Diukur': '🔴 Belum Pernah Diukur (Wajib Diawasi)'
             })
         })
 
