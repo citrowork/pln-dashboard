@@ -1105,7 +1105,26 @@ if menu_selection == "📊 Dashboard Utama":
 
         st.dataframe(display_queue, use_container_width=True, hide_index=True)
         
-        csv_queue = display_queue.to_csv(index=False).encode('utf-8')
+        # Clean export dataframe for Excel/CSV (clean professional text without emojis so Excel renders flawlessly)
+        export_queue = pd.DataFrame({
+            'Kode Gardu': tab_queue['TF_Code'],
+            'Nama Gardu': tab_queue['TF_Name'],
+            'Kapasitas (kVA)': tab_queue['TF_MLoad'],
+            'Fasa': tab_queue['TF_Phase'].astype(str) + " Fasa",
+            'Konstruksi': tab_queue['TF_Construction'].fillna('-'),
+            'Tanggal Ukur Terakhir': tab_queue['Date'].fillna('Belum Pernah Diukur'),
+            'Usia Pengukuran': tab_queue.apply(
+                lambda r: f"{r['Months_Since_Measurement']:.1f} Bulan lalu (Lewat {(r['Months_Since_Measurement']-6):.1f} Bulan)" 
+                if r['Measurement_Status'] == 'Perlu Ukur Ulang' and pd.notna(r['Months_Since_Measurement']) 
+                else "Belum Pernah Diukur", axis=1
+            ),
+            'Status SPLN': tab_queue['Measurement_Status'].map({
+                'Perlu Ukur Ulang': 'Lewat 6 Bulan (Wajib Ukur)',
+                'Belum Diukur': 'Belum Pernah Diukur (Wajib Diawasi)'
+            })
+        })
+
+        csv_queue = export_queue.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             "📥 Unduh Daftar Rencana Pengukuran Lapangan (CSV)",
             data=csv_queue,
@@ -1619,7 +1638,7 @@ elif menu_selection == "📋 Data Semua Trafo":
     )
 
     # CSV Download
-    csv_data = filtered_df[show_cols].to_csv(index=False).encode('utf-8')
+    csv_data = filtered_df[show_cols].to_csv(index=False).encode('utf-8-sig')
     st.download_button(
         label="📥 Unduh Data Terfilter (CSV)",
         data=csv_data,
