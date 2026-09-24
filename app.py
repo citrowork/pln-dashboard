@@ -769,50 +769,86 @@ if menu_selection == "📊 Dashboard Utama":
             map_center = dict(lat=-8.032, lon=127.950)
             map_zoom = 7.5
 
-        fig_map = px.scatter_mapbox(
-            map_df,
-            lat='latitude',
-            lon='longitude',
-            hover_name='TF_Name',
-            hover_data={
+        try:
+            hover_dict = {
                 'TF_Code': True,
-                'TF_MLoad': ':.0f kVA',
-                'Load Percentage': ':.1f%',
-                'Unbalance (%)': ':.1f%',
+                'TF_MLoad': True,
+                'Load Percentage': True,
+                'Unbalance (%)': True,
                 'Map_Status': True,
                 'Date': True,
-                'Months_Since_Measurement': ':.1f bln',
+                'Months_Since_Measurement': True,
                 'latitude': False,
                 'longitude': False
-            },
-            color='Map_Status',
-            color_discrete_map=color_map,
-            center=map_center,
-            zoom=map_zoom,
-            mapbox_style="open-street-map",
-            height=450
-        )
-        fig_map.update_layout(
-            margin=dict(l=0, r=0, t=0, b=0),
-            mapbox=dict(
-                center=map_center,
-                zoom=map_zoom,
-                style="open-street-map"
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=0.02,
-                xanchor="center",
-                x=0.5,
-                bgcolor="rgba(255, 255, 255, 0.9)"
+            }
+
+            if hasattr(px, 'scatter_map'):
+                fig_map = px.scatter_map(
+                    map_df,
+                    lat='latitude',
+                    lon='longitude',
+                    hover_name='TF_Name',
+                    hover_data=hover_dict,
+                    color='Map_Status',
+                    color_discrete_map=color_map,
+                    center=map_center,
+                    zoom=map_zoom,
+                    map_style="open-street-map",
+                    height=450
+                )
+                fig_map.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    map=dict(
+                        center=map_center,
+                        zoom=map_zoom,
+                        style="open-street-map"
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=0.02,
+                        xanchor="center",
+                        x=0.5,
+                        bgcolor="rgba(255, 255, 255, 0.9)"
+                    )
+                )
+            else:
+                fig_map = px.scatter_mapbox(
+                    map_df,
+                    lat='latitude',
+                    lon='longitude',
+                    hover_name='TF_Name',
+                    hover_data=hover_dict,
+                    color='Map_Status',
+                    color_discrete_map=color_map,
+                    center=map_center,
+                    zoom=map_zoom,
+                    mapbox_style="open-street-map",
+                    height=450
+                )
+                fig_map.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    mapbox=dict(
+                        center=map_center,
+                        zoom=map_zoom,
+                        style="open-street-map"
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=0.02,
+                        xanchor="center",
+                        x=0.5,
+                        bgcolor="rgba(255, 255, 255, 0.9)"
+                    )
+                )
+            st.plotly_chart(
+                fig_map,
+                use_container_width=True,
+                config={'scrollZoom': True, 'displayModeBar': False}
             )
-        )
-        st.plotly_chart(
-            fig_map,
-            use_container_width=True,
-            config={'scrollZoom': True, 'displayModeBar': False}
-        )
+        except Exception as map_err:
+            st.warning(f"⚠️ Peta tidak dapat dimuat: {map_err}")
     else:
         st.info("Koordinat gardu tidak valid untuk ditampilkan pada peta.")
 
