@@ -88,7 +88,7 @@ st.markdown("""
             pointer-events: auto !important;
         }
 
-        /* 4. Hide Deploy button, Fork button, GitHub logo, Main Menu, and Status widget */
+        /* 4. Hide Deploy button, Fork button, GitHub logo, Streamlit branding/footer, Main Menu, and Status widget */
         [data-testid="stAppDeployButton"],
         [data-testid="stMainMenu"],
         [data-testid="stStatusWidget"],
@@ -111,7 +111,13 @@ st.markdown("""
         [data-testid="stToolbar"] [title*="GitHub" i],
         [data-testid="manage-app-button"],
         .stAppDeployButton,
-        #MainMenu {
+        #MainMenu,
+        footer,
+        [data-testid="stFooter"],
+        .stFooter,
+        [class*="viewerBadge"],
+        [class*="ViewerBadge"],
+        .viewerBadge_container__1QSob {
             display: none !important;
             visibility: hidden !important;
             opacity: 0 !important;
