@@ -1745,16 +1745,16 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
 
                 # Optional Jurusan
                 with st.expander("➕ Rincian Arus Jurusan JTR (Opsional / Multi-Jurusan)", expanded=False):
-                    st.caption("Jika tidak diisi, arus Jurusan 1 otomatis disamakan dengan Arus Pangkal.")
+                    st.caption("ℹ️ Biarkan kosong (0) jika tidak diukur per jurusan. Sistem akan otomatis mengisi Jurusan 1 sama persis dengan Arus Pangkal.")
                     col_j1_r, col_j1_s, col_j1_t, col_j1_n = st.columns(4)
                     with col_j1_r:
-                        m_ar1 = st.number_input("Jurusan 1 R (A)", value=m_arp, min_value=0.0, step=0.5, key="man_ar1")
+                        m_ar1 = st.number_input("Jurusan 1 R (A)", value=0.0, min_value=0.0, step=0.5, key="man_ar1")
                     with col_j1_s:
-                        m_as1 = st.number_input("Jurusan 1 S (A)", value=m_asp, min_value=0.0, step=0.5, key="man_as1")
+                        m_as1 = st.number_input("Jurusan 1 S (A)", value=0.0, min_value=0.0, step=0.5, key="man_as1")
                     with col_j1_t:
-                        m_at1 = st.number_input("Jurusan 1 T (A)", value=m_atp, min_value=0.0, step=0.5, key="man_at1")
+                        m_at1 = st.number_input("Jurusan 1 T (A)", value=0.0, min_value=0.0, step=0.5, key="man_at1")
                     with col_j1_n:
-                        m_an1 = st.number_input("Jurusan 1 N (A)", value=m_anp, min_value=0.0, step=0.5, key="man_an1")
+                        m_an1 = st.number_input("Jurusan 1 N (A)", value=0.0, min_value=0.0, step=0.5, key="man_an1")
 
                     col_j2_r, col_j2_s, col_j2_t, col_j2_n = st.columns(4)
                     with col_j2_r:
@@ -1845,6 +1845,39 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                             gc = gspread.authorize(creds)
                             sheet_raw = gc.open("DATA TRAFO").worksheet("RAW_MEA")
 
+                            # Check whether user explicitly filled any custom jalur
+                            has_j1 = any(float(locals().get(k, 0) or 0) > 0 for k in ['m_ar1', 'm_as1', 'm_at1', 'm_an1'])
+                            has_j2 = any(float(locals().get(k, 0) or 0) > 0 for k in ['m_ar2', 'm_as2', 'm_at2', 'm_an2'])
+                            has_j3 = any(float(locals().get(k, 0) or 0) > 0 for k in ['m_ar3', 'm_as3', 'm_at3', 'm_an3'])
+                            has_any_jalur = has_j1 or has_j2 or has_j3
+
+                            if not has_any_jalur:
+                                # AUTO-FILL: Jalur 1 matches Pangkal exactly, unused jalurs remain blank
+                                val_ar1, val_as1, val_at1, val_an1 = m_arp, m_asp, m_atp, m_anp
+                                val_ar2, val_as2, val_at2, val_an2 = "", "", "", ""
+                                val_ar3, val_as3, val_at3, val_an3 = "", "", "", ""
+                            else:
+                                val_ar1 = m_ar1 if has_j1 else (m_arp if not has_j2 and not has_j3 else "")
+                                val_as1 = m_as1 if has_j1 else (m_asp if not has_j2 and not has_j3 else "")
+                                val_at1 = m_at1 if has_j1 else (m_atp if not has_j2 and not has_j3 else "")
+                                val_an1 = m_an1 if has_j1 else (m_anp if not has_j2 and not has_j3 else "")
+
+                                val_ar2 = m_ar2 if has_j2 else ""
+                                val_as2 = m_as2 if has_j2 else ""
+                                val_at2 = m_at2 if has_j2 else ""
+                                val_an2 = m_an2 if has_j2 else ""
+
+                                val_ar3 = m_ar3 if has_j3 else ""
+                                val_as3 = m_as3 if has_j3 else ""
+                                val_at3 = m_at3 if has_j3 else ""
+                                val_an3 = m_an3 if has_j3 else ""
+
+                            # Peaks (matches corresponding pangkal and active jalurs)
+                            peak_rp, peak_sp, peak_tp, peak_np = m_arp, m_asp, m_atp, m_anp
+                            peak_r1, peak_s1, peak_t1, peak_n1 = val_ar1, val_as1, val_at1, val_an1
+                            peak_r2, peak_s2, peak_t2, peak_n2 = val_ar2, val_as2, val_at2, val_an2
+                            peak_r3, peak_s3, peak_t3, peak_n3 = val_ar3, val_as3, val_at3, val_an3
+
                             # Build 77-column row
                             row_manual = [
                                 str(m_tanggal),
@@ -1853,37 +1886,18 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                                 m_vrn, m_vsn, m_vtn,
                                 m_vrs, m_vrt, m_vst,
                                 m_arp, m_asp, m_atp, m_anp,
-                                m_ar1 if 'm_ar1' in locals() else m_arp,
-                                m_as1 if 'm_as1' in locals() else m_asp,
-                                m_at1 if 'm_at1' in locals() else m_atp,
-                                m_an1 if 'm_an1' in locals() else m_anp,
-                                m_ar2 if 'm_ar2' in locals() else 0,
-                                m_as2 if 'm_as2' in locals() else 0,
-                                m_at2 if 'm_at2' in locals() else 0,
-                                m_an2 if 'm_an2' in locals() else 0,
-                                m_ar3 if 'm_ar3' in locals() else 0,
-                                m_as3 if 'm_as3' in locals() else 0,
-                                m_at3 if 'm_at3' in locals() else 0,
-                                m_an3 if 'm_an3' in locals() else 0,
-                                # Peaks
-                                m_arp, m_asp, m_atp, m_anp,
-                                m_ar1 if 'm_ar1' in locals() else m_arp,
-                                m_as1 if 'm_as1' in locals() else m_asp,
-                                m_at1 if 'm_at1' in locals() else m_atp,
-                                m_an1 if 'm_an1' in locals() else m_anp,
-                                m_ar2 if 'm_ar2' in locals() else 0,
-                                m_as2 if 'm_as2' in locals() else 0,
-                                m_at2 if 'm_at2' in locals() else 0,
-                                m_an2 if 'm_an2' in locals() else 0,
-                                m_ar3 if 'm_ar3' in locals() else 0,
-                                m_as3 if 'm_as3' in locals() else 0,
-                                m_at3 if 'm_at3' in locals() else 0,
-                                m_an3 if 'm_an3' in locals() else 0,
-                                # THD & H1 (24 zeros)
-                                0, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0,
+                                val_ar1, val_as1, val_at1, val_an1,
+                                val_ar2, val_as2, val_at2, val_an2,
+                                val_ar3, val_as3, val_at3, val_an3,
+                                peak_rp, peak_sp, peak_tp, peak_np,
+                                peak_r1, peak_s1, peak_t1, peak_n1,
+                                peak_r2, peak_s2, peak_t2, peak_n2,
+                                peak_r3, peak_s3, peak_t3, peak_n3,
+                                # THD & H1 (24 columns left blank for manual measurement)
+                                "", "", "", "", "", "",
+                                "", "", "", "", "", "",
+                                "", "", "", "", "", "",
+                                "", "", "", "", "", "",
                                 # ALA (12 zeros)
                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
                             ]
