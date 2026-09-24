@@ -1600,12 +1600,17 @@ elif menu_selection == "📋 Data Semua Trafo":
 elif menu_selection == "📥 Input Pengukuran Gardu":
 
     st.markdown("""
-        <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin-bottom: 20px;'>
-            <h2 style='margin: 0 0 6px 0; font-size: 22px; color: #0F172A; font-weight: 800;'>
-                📥 Input Hasil Pengukuran Alat Hioki (AI Assisted)
-            </h2>
-            <div style='font-size: 13px; color: #64748B;'>
-                Unggah dokumen laporan PDF dari Power Quality Analyzer Hioki. AI Gemini akan mengekstrak voltase, arus fasa/jurusan, dan harmonisa secara otomatis ke sheet RAW_MEA.
+        <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
+            <div>
+                <h2 style='margin: 0 0 6px 0; font-size: 22px; color: #0F172A; font-weight: 800; display: flex; align-items: center; gap: 8px;'>
+                    <span>📥</span> Pencatatan & Input Pengukuran Gardu
+                </h2>
+                <div style='font-size: 13px; color: #64748B;'>
+                    Pilih metode input sesuai peralatan lapangan: formulir manual untuk Avometer / Tang Ampere, atau unggah laporan PDF untuk alat Hioki PQA.
+                </div>
+            </div>
+            <div style='background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 700; color: #1E40AF; white-space: nowrap;'>
+                ⚡ Standar SPLN: Siklus Wajib 6 Bulan
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -1614,45 +1619,283 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
     trafo_options = dict(zip(valid_trafo_list['TF_Code'], valid_trafo_list['TF_Name']))
 
     selected_code = st.selectbox(
-        "🔍 1. Pilih Gardu yang Diukur:",
+        "🔍 1. Cari & Pilih Gardu Transformator:",
         options=["-- Pilih Gardu --"] + list(trafo_options.keys()),
         format_func=lambda x: f"{trafo_options[x]} ({x})" if x != "-- Pilih Gardu --" else x
     )
 
     if selected_code != "-- Pilih Gardu --":
         curr_trafo = df[df['TF_Code'] == selected_code].iloc[0]
+        tf_mload = float(curr_trafo.get('TF_MLoad', 50) or 50)
+        tf_phase = int(curr_trafo.get('TF_Phase', 3) or 3)
+        tf_const = str(curr_trafo.get('TF_Construction', 'Cantol'))
+        last_date = str(curr_trafo.get('Date', 'Belum Pernah Diukur'))
+        mea_stat = str(curr_trafo.get('Measurement_Status', 'Belum Diukur'))
 
-        st.markdown(f"#### 📄 Input Pengukuran untuk: **{curr_trafo['TF_Name']} ({selected_code})**")
+        # Quick info badge of the selected transformer
+        st.markdown(f"""
+            <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;'>
+                <div>
+                    <span style='font-size: 11px; font-weight: 700; color: #0072BC; text-transform: uppercase;'>GARDU TERPILIH</span>
+                    <div style='font-size: 16px; font-weight: 800; color: #0F172A;'>{curr_trafo['TF_Name']} <span style='font-size: 13px; color: #64748B;'>({selected_code})</span></div>
+                </div>
+                <div style='display: flex; gap: 14px; font-size: 12px;'>
+                    <span>Kapasitas: <b>{tf_mload:.0f} kVA</b></span>
+                    <span>Tipe: <b>{tf_phase} Fasa</b></span>
+                    <span>Konstruksi: <b>{tf_const}</b></span>
+                    <span>Status: <b>{mea_stat}</b> ({last_date})</span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
 
-        col_w1, col_w2 = st.columns(2)
-        with col_w1:
-            input_tanggal = st.date_input("2. Tanggal Pengukuran Lapangan", value=datetime.today())
-        with col_w2:
-            input_waktu = st.time_input("3. Waktu Pengukuran Lapangan", value=datetime.now().time())
+        # TAB SELECTION: MANUAL INPUT vs HIOKI PDF
+        tab_manual, tab_hioki = st.tabs([
+            "✍️ Input Manual (Avometer / Tang Ampere)",
+            "📄 Upload Laporan PDF Hioki (AI Assisted)"
+        ])
 
-        uploaded_file = st.file_uploader("4. Unggah File PDF Laporan Hioki", type=["pdf"])
+        # ---------------------------------------------------------
+        # TAB 1: INPUT MANUAL (AVOMETER / CLAMP METER)
+        # ---------------------------------------------------------
+        with tab_manual:
+            col_m_in, col_m_prev = st.columns([1.1, 1], gap="large")
 
-        if uploaded_file is not None:
-            st.info(f"File siap diproses: **{uploaded_file.name}** ({round(len(uploaded_file.getvalue())/1024, 1)} KB)")
+            with col_m_in:
+                st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 8px;'>📅 1. Waktu Pengukuran Lapangan</div>", unsafe_allow_html=True)
+                col_dt1, col_dt2 = st.columns(2)
+                with col_dt1:
+                    m_tanggal = st.date_input("Tanggal Ukur", value=datetime.today(), key="man_tgl")
+                with col_dt2:
+                    m_waktu = st.time_input("Jam Ukur", value=datetime.now().time(), key="man_jam")
 
-            if st.button("📤 Ekstrak Data & Simpan ke Database Google Sheets", type="primary", use_container_width=True):
-                with st.spinner("Sedang membaca PDF dan menjalankan ekstraksi AI Gemini..."):
-                    try:
-                        status_ok, pesan = bot_hioki.proses_pdf_ke_sheets(
-                            file_bytes=uploaded_file.getvalue(),
-                            tf_code=selected_code,
-                            tanggal=input_tanggal.strftime("%Y-%m-%d"),
-                            waktu=input_waktu.strftime("%H:%M:%S")
-                        )
+                st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin: 12px 0 8px 0;'>⚡ 2. Tegangan Pengukuran (Volt)</div>", unsafe_allow_html=True)
+                if tf_phase == 1:
+                    m_vrn = st.number_input("Tegangan Fasa - Netral (V_RN)", value=230.0, step=1.0, key="man_vrn_1p")
+                    m_vsn = 0.0
+                    m_vtn = 0.0
+                    m_vrs = 0.0
+                    m_vrt = 0.0
+                    m_vst = 0.0
+                else:
+                    col_v1, col_v2, col_v3 = st.columns(3)
+                    with col_v1:
+                        m_vrn = st.number_input("Voltase R-N (V)", value=230.0, step=1.0, key="man_vrn")
+                    with col_v2:
+                        m_vsn = st.number_input("Voltase S-N (V)", value=230.0, step=1.0, key="man_vsn")
+                    with col_v3:
+                        m_vtn = st.number_input("Voltase T-N (V)", value=230.0, step=1.0, key="man_vtn")
 
-                        if status_ok:
-                            st.success(f"✅ Selesai! {pesan}")
+                    m_vrs = round(m_vrn * 1.732, 1)
+                    m_vrt = round(m_vtn * 1.732, 1)
+                    m_vst = round(m_vsn * 1.732, 1)
+
+                st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin: 12px 0 8px 0;'>🔌 3. Arus Beban Pangkal Trafo (Ampere)</div>", unsafe_allow_html=True)
+                if tf_phase == 1:
+                    col_a1, col_a2 = st.columns(2)
+                    with col_a1:
+                        m_arp = st.number_input("Arus Fasa R (Ampere)", value=0.0, min_value=0.0, step=0.5, key="man_arp_1p")
+                    with col_a2:
+                        m_anp = st.number_input("Arus Netral N (Ampere)", value=0.0, min_value=0.0, step=0.5, key="man_anp_1p")
+                    m_asp = 0.0
+                    m_atp = 0.0
+                else:
+                    col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+                    with col_a1:
+                        m_arp = st.number_input("Arus Fasa R (A)", value=0.0, min_value=0.0, step=0.5, key="man_arp")
+                    with col_a2:
+                        m_asp = st.number_input("Arus Fasa S (A)", value=0.0, min_value=0.0, step=0.5, key="man_asp")
+                    with col_a3:
+                        m_atp = st.number_input("Arus Fasa T (A)", value=0.0, min_value=0.0, step=0.5, key="man_atp")
+                    with col_a4:
+                        m_anp = st.number_input("Arus Netral N (A)", value=0.0, min_value=0.0, step=0.5, key="man_anp")
+
+                # Optional Jurusan
+                with st.expander("➕ Rincian Arus Jurusan JTR (Opsional / Multi-Jurusan)", expanded=False):
+                    st.caption("Jika tidak diisi, arus Jurusan 1 otomatis disamakan dengan Arus Pangkal.")
+                    col_j1_r, col_j1_s, col_j1_t, col_j1_n = st.columns(4)
+                    with col_j1_r:
+                        m_ar1 = st.number_input("Jurusan 1 R (A)", value=m_arp, min_value=0.0, step=0.5, key="man_ar1")
+                    with col_j1_s:
+                        m_as1 = st.number_input("Jurusan 1 S (A)", value=m_asp, min_value=0.0, step=0.5, key="man_as1")
+                    with col_j1_t:
+                        m_at1 = st.number_input("Jurusan 1 T (A)", value=m_atp, min_value=0.0, step=0.5, key="man_at1")
+                    with col_j1_n:
+                        m_an1 = st.number_input("Jurusan 1 N (A)", value=m_anp, min_value=0.0, step=0.5, key="man_an1")
+
+                    col_j2_r, col_j2_s, col_j2_t, col_j2_n = st.columns(4)
+                    with col_j2_r:
+                        m_ar2 = st.number_input("Jurusan 2 R (A)", value=0.0, min_value=0.0, step=0.5, key="man_ar2")
+                    with col_j2_s:
+                        m_as2 = st.number_input("Jurusan 2 S (A)", value=0.0, min_value=0.0, step=0.5, key="man_as2")
+                    with col_j2_t:
+                        m_at2 = st.number_input("Jurusan 2 T (A)", value=0.0, min_value=0.0, step=0.5, key="man_at2")
+                    with col_j2_n:
+                        m_an2 = st.number_input("Jurusan 2 N (A)", value=0.0, min_value=0.0, step=0.5, key="man_an2")
+
+                    col_j3_r, col_j3_s, col_j3_t, col_j3_n = st.columns(4)
+                    with col_j3_r:
+                        m_ar3 = st.number_input("Jurusan 3 R (A)", value=0.0, min_value=0.0, step=0.5, key="man_ar3")
+                    with col_j3_s:
+                        m_as3 = st.number_input("Jurusan 3 S (A)", value=0.0, min_value=0.0, step=0.5, key="man_as3")
+                    with col_j3_t:
+                        m_at3 = st.number_input("Jurusan 3 T (A)", value=0.0, min_value=0.0, step=0.5, key="man_at3")
+                    with col_j3_n:
+                        m_an3 = st.number_input("Jurusan 3 N (A)", value=0.0, min_value=0.0, step=0.5, key="man_an3")
+
+            with col_m_prev:
+                st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 8px;'>📊 Live Preview Hasil Perhitungan</div>", unsafe_allow_html=True)
+                
+                # Live Calculations
+                if tf_phase == 1:
+                    calc_load_kva = round((m_vrn * m_arp) / 1000.0, 2)
+                    calc_load_pct = round((calc_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
+                    calc_unbalance = 0.0
+                else:
+                    calc_load_kva = round(((m_vrn * m_arp) + (m_vsn * m_asp) + (m_vtn * m_atp)) / 1000.0, 2)
+                    calc_load_pct = round((calc_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
+                    
+                    avg_i = (m_arp + m_asp + m_atp) / 3.0
+                    if avg_i > 0:
+                        max_dev = max(abs(m_arp - avg_i), abs(m_asp - avg_i), abs(m_atp - avg_i))
+                        calc_unbalance = round((max_dev / avg_i) * 100.0, 2)
+                    else:
+                        calc_unbalance = 0.0
+
+                # Metric Cards
+                col_cp1, col_cp2 = st.columns(2)
+                with col_cp1:
+                    is_ov = calc_load_pct > 80
+                    st.markdown(f"""
+                        <div class='kpi-card {"kpi-card-danger" if is_ov else "kpi-card-success"}' style='padding: 12px; margin-bottom: 8px;'>
+                            <div class='kpi-title'>Total Beban</div>
+                            <div class='kpi-value' style='font-size: 20px;'>{calc_load_kva} <span style='font-size: 12px;'>kVA</span></div>
+                            <div class='kpi-desc'><b>{calc_load_pct}%</b> dari {tf_mload:.0f} kVA</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col_cp2:
+                    is_unb_crit = calc_unbalance > 20
+                    is_unb_warn = 10 <= calc_unbalance <= 20
+                    card_cls = "kpi-card-danger" if is_unb_crit else ("kpi-card-warning" if is_unb_warn else "kpi-card-success")
+                    st.markdown(f"""
+                        <div class='kpi-card {card_cls}' style='padding: 12px; margin-bottom: 8px;'>
+                            <div class='kpi-title'>Ketidakseimbangan</div>
+                            <div class='kpi-value' style='font-size: 20px;'>{calc_unbalance:.1f}%</div>
+                            <div class='kpi-desc'>{"🔴 Kritis (>20%)" if is_unb_crit else ("🟠 Perhatian" if is_unb_warn else "🟢 Seimbang (<10%)")}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                # Comparative Phase Bar Preview
+                if tf_phase != 1 and (m_arp > 0 or m_asp > 0 or m_atp > 0):
+                    fig_prev = go.Figure()
+                    fig_prev.add_trace(go.Bar(
+                        x=['Fasa R', 'Fasa S', 'Fasa T', 'Netral N'],
+                        y=[m_arp, m_asp, m_atp, m_anp],
+                        marker_color=['#EF4444', '#F59E0B', '#10B981', '#64748B'],
+                        text=[f"{m_arp:.1f}A", f"{m_asp:.1f}A", f"{m_atp:.1f}A", f"{m_anp:.1f}A"],
+                        textposition='outside'
+                    ))
+                    fig_prev.update_layout(
+                        height=200,
+                        margin=dict(l=10, r=10, t=20, b=10),
+                        yaxis_title="Arus (A)"
+                    )
+                    st.plotly_chart(fig_prev, use_container_width=True)
+
+                # Action button
+                btn_simpan_manual = st.button("💾 Simpan Pengukuran Manual ke Google Sheets", type="primary", use_container_width=True)
+                if btn_simpan_manual:
+                    with st.spinner("Menyimpan baris pengukuran ke RAW_MEA..."):
+                        try:
+                            creds = get_google_credentials()
+                            gc = gspread.authorize(creds)
+                            sheet_raw = gc.open("DATA TRAFO").worksheet("RAW_MEA")
+
+                            # Build 77-column row
+                            row_manual = [
+                                str(m_tanggal),
+                                str(m_waktu),
+                                str(selected_code),
+                                m_vrn, m_vsn, m_vtn,
+                                m_vrs, m_vrt, m_vst,
+                                m_arp, m_asp, m_atp, m_anp,
+                                m_ar1 if 'm_ar1' in locals() else m_arp,
+                                m_as1 if 'm_as1' in locals() else m_asp,
+                                m_at1 if 'm_at1' in locals() else m_atp,
+                                m_an1 if 'm_an1' in locals() else m_anp,
+                                m_ar2 if 'm_ar2' in locals() else 0,
+                                m_as2 if 'm_as2' in locals() else 0,
+                                m_at2 if 'm_at2' in locals() else 0,
+                                m_an2 if 'm_an2' in locals() else 0,
+                                m_ar3 if 'm_ar3' in locals() else 0,
+                                m_as3 if 'm_as3' in locals() else 0,
+                                m_at3 if 'm_at3' in locals() else 0,
+                                m_an3 if 'm_an3' in locals() else 0,
+                                # Peaks
+                                m_arp, m_asp, m_atp, m_anp,
+                                m_ar1 if 'm_ar1' in locals() else m_arp,
+                                m_as1 if 'm_as1' in locals() else m_asp,
+                                m_at1 if 'm_at1' in locals() else m_atp,
+                                m_an1 if 'm_an1' in locals() else m_anp,
+                                m_ar2 if 'm_ar2' in locals() else 0,
+                                m_as2 if 'm_as2' in locals() else 0,
+                                m_at2 if 'm_at2' in locals() else 0,
+                                m_an2 if 'm_an2' in locals() else 0,
+                                m_ar3 if 'm_ar3' in locals() else 0,
+                                m_as3 if 'm_as3' in locals() else 0,
+                                m_at3 if 'm_at3' in locals() else 0,
+                                m_an3 if 'm_an3' in locals() else 0,
+                                # THD & H1 (24 zeros)
+                                0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0,
+                                # ALA (12 zeros)
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                            ]
+
+                            sheet_raw.append_row(row_manual)
                             st.cache_data.clear()
-                        else:
-                            st.error(f"❌ Ekstraksi Gagal: {pesan}")
+                            st.success(f"✅ Berhasil! Pengukuran manual untuk gardu {curr_trafo['TF_Name']} ({selected_code}) telah dicatat di Google Sheets (RAW_MEA). Status SPLN kini terbarui.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Gagal menyimpan pengukuran manual: {e}")
 
-                    except Exception as e:
-                        st.error(f"Terjadi kesalahan sistem: {e}")
+        # ---------------------------------------------------------
+        # TAB 2: UPLOAD HIOKI PDF
+        # ---------------------------------------------------------
+        with tab_hioki:
+            st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 8px;'>📄 Ekstraksi Otomatis Dokumen PDF Hioki PQA</div>", unsafe_allow_html=True)
+            col_w1, col_w2 = st.columns(2)
+            with col_w1:
+                input_tanggal = st.date_input("Tanggal Pengukuran Lapangan", value=datetime.today(), key="hioki_tgl")
+            with col_w2:
+                input_waktu = st.time_input("Waktu Pengukuran Lapangan", value=datetime.now().time(), key="hioki_jam")
+
+            uploaded_file = st.file_uploader("Unggah File PDF Laporan Hioki", type=["pdf"], key="hioki_pdf")
+
+            if uploaded_file is not None:
+                st.info(f"File siap diproses: **{uploaded_file.name}** ({round(len(uploaded_file.getvalue())/1024, 1)} KB)")
+
+                if st.button("📤 Ekstrak Data & Simpan ke Database Google Sheets", type="primary", use_container_width=True, key="btn_hioki_save"):
+                    with st.spinner("Sedang membaca PDF dan menjalankan ekstraksi AI Gemini..."):
+                        try:
+                            status_ok, pesan = bot_hioki.proses_pdf_ke_sheets(
+                                file_bytes=uploaded_file.getvalue(),
+                                tf_code=selected_code,
+                                tanggal=input_tanggal.strftime("%Y-%m-%d"),
+                                waktu=input_waktu.strftime("%H:%M:%S")
+                            )
+
+                            if status_ok:
+                                st.success(f"✅ Selesai! {pesan}")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Ekstraksi Gagal: {pesan}")
+
+                        except Exception as e:
+                            st.error(f"Terjadi kesalahan sistem: {e}")
     else:
         st.info("👆 Silakan pilih salah satu gardu terlebih dahulu.")
 
