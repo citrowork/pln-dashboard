@@ -1675,6 +1675,12 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
         </div>
     """, unsafe_allow_html=True)
 
+    # Persistent success notification after rerun
+    if "upload_success_notification" in st.session_state:
+        succ_msg = st.session_state.pop("upload_success_notification")
+        st.success(succ_msg)
+        st.toast(succ_msg, icon="⚡")
+
     valid_trafo_list = df.dropna(subset=['TF_Code', 'TF_Name']).drop_duplicates(subset=['TF_Code'])
     trafo_options = dict(zip(valid_trafo_list['TF_Code'], valid_trafo_list['TF_Name']))
 
@@ -1930,7 +1936,7 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
 
                             sheet_raw.append_row(row_manual)
                             st.cache_data.clear()
-                            st.success(f"✅ Berhasil! Pengukuran manual untuk gardu {curr_trafo['TF_Name']} ({selected_code}) telah dicatat di Google Sheets (RAW_MEA). Status SPLN kini terbarui.")
+                            st.session_state["upload_success_notification"] = f"✅ Berhasil! Pengukuran manual untuk gardu {curr_trafo['TF_Name']} ({selected_code}) telah dicatat di Google Sheets (RAW_MEA). Status SPLN kini terbarui."
                             st.rerun()
                         except Exception as e:
                             st.error(f"Gagal menyimpan pengukuran manual: {e}")
@@ -1962,7 +1968,7 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                             )
 
                             if status_ok:
-                                st.success(f"✅ Selesai! {pesan}")
+                                st.session_state["upload_success_notification"] = f"✅ Berhasil! Data laporan Hioki untuk gardu {curr_trafo['TF_Name']} ({selected_code}) berhasil diekstrak dan disimpan ke Google Sheets (RAW_MEA). Status SPLN kini terbarui. ({pesan})"
                                 st.cache_data.clear()
                                 st.rerun()
                             else:
@@ -2048,6 +2054,7 @@ elif menu_selection == "✏️ Edit Data Trafo":
 
                         st.cache_data.clear()
                         st.success(f"✅ Profil Gardu '{new_name}' ({selected_code}) berhasil diperbarui!")
+                        st.toast(f"Profil Gardu '{new_name}' ({selected_code}) berhasil diperbarui!", icon="✅")
                     else:
                         st.error(f"❌ Kode gardu {selected_code} tidak ditemukan di INFO_DATA.")
 
