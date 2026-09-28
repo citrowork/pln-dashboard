@@ -61,10 +61,10 @@ SCHEMA: V_RN, V_SN, V_TN, V_RS, V_RT, V_ST, A_R_P, A_S_P, A_T_P, A_N_P, A_R_1, A
 No markdown, no prose. Output ONLY the raw JSON array. 
 Text to extract: {teks_laporan}
 """
-        # Call Gemini model with automatic fallback across active model versions
+        # Call Gemini model with automatic fallback across active Flash-Lite versions (high quota / low latency)
         response = None
         last_err = None
-        for model_name in ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash']:
+        for model_name in ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']:
             try:
                 ai_model = genai.GenerativeModel(model_name)
                 response = ai_model.generate_content(prompt)
