@@ -19,7 +19,6 @@ elif "GEMINI_API_KEY" in os.environ:
 
 if gemini_key:
     genai.configure(api_key=gemini_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
 
 def proses_pdf_ke_sheets(file_bytes, tf_code, tanggal, waktu):
     """
@@ -62,7 +61,22 @@ SCHEMA: V_RN, V_SN, V_TN, V_RS, V_RT, V_ST, A_R_P, A_S_P, A_T_P, A_N_P, A_R_1, A
 No markdown, no prose. Output ONLY the raw JSON array. 
 Text to extract: {teks_laporan}
 """
-        response = model.generate_content(prompt)
+        # Call Gemini model with automatic fallback across active model versions
+        response = None
+        last_err = None
+        for model_name in ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash']:
+            try:
+                ai_model = genai.GenerativeModel(model_name)
+                response = ai_model.generate_content(prompt)
+                if response and response.text:
+                    break
+            except Exception as err:
+                last_err = err
+                continue
+
+        if not response or not response.text:
+            raise RuntimeError(f"Gagal memanggil model AI Gemini: {last_err}")
+
         json_bersih = response.text.replace("```json", "").replace("```", "").strip()
         data_json = json.loads(json_bersih)
         
