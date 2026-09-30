@@ -1634,7 +1634,7 @@ elif menu_selection == "📋 Data Semua Trafo":
     show_cols = [
         'TF_Code', 'TF_Name', 'TF_Unit', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
         'Measurement_Status', 'Load Percentage', 'Current Load', 'Unbalance (%)',
-        'Health Score', 'Date', 'A_R_P', 'A_S_P', 'A_T_P', 'TF_Coordinate'
+        'Health Score', 'Date', 'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'TF_Coordinate'
     ]
     show_cols = [c for c in show_cols if c in filtered_df.columns]
 
