@@ -444,16 +444,18 @@ def load_all_transformer_data():
         df['TF_Phase'] = pd.to_numeric(df['TF_Phase'], errors='coerce').fillna(3).astype(int)
 
         # -------------------------------------------------------------
-        # 3. ELECTRICAL CALCULATIONS (Standard PLN & IEEE)
+        # 3. ELECTRICAL CALCULATIONS (Standar Listrik PLN: 230V / 400V)
         # -------------------------------------------------------------
-        # Load (kVA)
-        # S (kVA) = (V_RN * I_R + V_SN * I_S + V_TN * I_T) / 1000
-        # If Phase-to-Neutral voltages are missing, fallback to 230V standard.
+        # Load (kVA) - Standar Listrik PLN: Tegangan Nominal 230V (Fasa-Netral)
+        # 3 Fasa: S (kVA) = 230 * (I_R + I_S + I_T) / 1000
+        # 1 Fasa: S (kVA) = 230 * I_R / 1000
         df['Current Load'] = np.where(
             df['Is_Measured'],
-            (((df['V_RN'].fillna(230) * df['A_R_P']) + 
-              (df['V_SN'].fillna(230) * df['A_S_P']) + 
-              (df['V_TN'].fillna(230) * df['A_T_P'])) / 1000).round(2),
+            np.where(
+                df['TF_Phase'] == 1,
+                ((230.0 * df['A_R_P']) / 1000.0).round(2),
+                ((230.0 * (df['A_R_P'] + df['A_S_P'] + df['A_T_P'])) / 1000.0).round(2)
+            ),
             np.nan
         )
 
@@ -1512,9 +1514,11 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                 if c in hist_raw.columns:
                     hist_raw[c] = pd.to_numeric(hist_raw[c], errors='coerce').fillna(0)
 
-            hist_raw['Hist_Load_kVA'] = (((hist_raw['V_RN'].replace(0, 230) * hist_raw['A_R_P']) +
-                                          (hist_raw['V_SN'].replace(0, 230) * hist_raw['A_S_P']) +
-                                          (hist_raw['V_TN'].replace(0, 230) * hist_raw['A_T_P'])) / 1000).round(2)
+            # Standar Listrik PLN: Tegangan Nominal 230V
+            if int(static_info.get('TF_Phase', 3) or 3) == 1:
+                hist_raw['Hist_Load_kVA'] = ((230.0 * hist_raw['A_R_P']) / 1000.0).round(2)
+            else:
+                hist_raw['Hist_Load_kVA'] = ((230.0 * (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P'])) / 1000.0).round(2)
             max_mload = float(static_info['TF_MLoad'] or 50.0)
             hist_raw['Hist_Load_Pct'] = ((hist_raw['Hist_Load_kVA'] / max_mload) * 100).round(1) if max_mload > 0 else 0.0
             hist_raw['Hist_Avg_I'] = (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P']) / 3
@@ -1568,7 +1572,9 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                 fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_RN'], name='Voltase RN (V)', line=dict(color='#EF4444', width=2)))
                 fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_SN'], name='Voltase SN (V)', line=dict(color='#F59E0B', width=2)))
                 fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_TN'], name='Voltase TN (V)', line=dict(color='#10B981', width=2)))
-                fig_trend.add_hline(y=230, line_dash="dash", line_color="#3B82F6", annotation_text="Nominal 230V")
+                fig_trend.add_hline(y=230, line_dash="dash", line_color="#3B82F6", annotation_text="Nominal PLN 230V")
+                fig_trend.add_hline(y=241.5, line_dash="dot", line_color="#EF4444", annotation_text="Batas Atas SPLN (+5%: 241.5V)")
+                fig_trend.add_hline(y=207.0, line_dash="dot", line_color="#EF4444", annotation_text="Batas Bawah SPLN (-10%: 207V)")
                 fig_trend.update_layout(yaxis_title="Tegangan Fasa-Netral (Volt)")
 
             else:
@@ -1838,12 +1844,13 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
             with col_m_prev:
                 st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 8px;'>📊 Live Preview Hasil Perhitungan</div>", unsafe_allow_html=True)
                 
+                # Standar Listrik PLN: Tegangan Nominal 230V
                 if tf_phase == 1:
-                    calc_load_kva = round((m_vrn * m_arp) / 1000.0, 2)
+                    calc_load_kva = round((230.0 * m_arp) / 1000.0, 2)
                     calc_load_pct = round((calc_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
                     calc_unbalance = 0.0
                 else:
-                    calc_load_kva = round(((m_vrn * m_arp) + (m_vsn * m_asp) + (m_vtn * m_atp)) / 1000.0, 2)
+                    calc_load_kva = round((230.0 * (m_arp + m_asp + m_atp)) / 1000.0, 2)
                     calc_load_pct = round((calc_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
                     
                     avg_i = (m_arp + m_asp + m_atp) / 3.0
