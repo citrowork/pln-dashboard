@@ -474,21 +474,23 @@ def load_all_transformer_data():
         )
 
         # Phase Unbalance (%)
-        # IEEE/PLN Formula: Max_Deviation_from_Average / Average_Current * 100
-        # Only applicable for 3-Phase units
+        # Standar PLN (Buku 3 / Standar Konstruksi Distribusi):
+        # Koefisien regim beban: a = I_R / I_avg, b = I_S / I_avg, c = I_T / I_avg
+        # Ketidakseimbangan (%) = (|a - 1| + |b - 1| + |c - 1|) / 3 * 100%
+        # Hanya berlaku untuk unit 3-Fasa
         df['Avg_Current'] = np.where(
-            df['Is_Measured'],
-            (df['A_R_P'] + df['A_S_P'] + df['A_T_P']) / 3,
+            df['Is_Measured'] & (df['TF_Phase'] != 1),
+            (df['A_R_P'] + df['A_S_P'] + df['A_T_P']) / 3.0,
             np.nan
         )
-        df['Dev_R'] = abs(df['A_R_P'] - df['Avg_Current'])
-        df['Dev_S'] = abs(df['A_S_P'] - df['Avg_Current'])
-        df['Dev_T'] = abs(df['A_T_P'] - df['Avg_Current'])
-        df['Max_Dev'] = df[['Dev_R', 'Dev_S', 'Dev_T']].max(axis=1)
+        
+        df['a_coef'] = np.where(df['Avg_Current'] > 0, df['A_R_P'] / df['Avg_Current'], np.nan)
+        df['b_coef'] = np.where(df['Avg_Current'] > 0, df['A_S_P'] / df['Avg_Current'], np.nan)
+        df['c_coef'] = np.where(df['Avg_Current'] > 0, df['A_T_P'] / df['Avg_Current'], np.nan)
 
         df['Unbalance (%)'] = np.where(
             df['Is_Measured'] & (df['TF_Phase'] != 1) & (df['Avg_Current'] > 0),
-            ((df['Max_Dev'] / df['Avg_Current']) * 100).round(2),
+            (((abs(df['a_coef'] - 1) + abs(df['b_coef'] - 1) + abs(df['c_coef'] - 1)) / 3.0) * 100.0).round(2),
             np.nan
         )
 
@@ -959,6 +961,18 @@ if menu_selection == "📊 Dashboard Utama":
 
     # TAB 2: KESEIMBANGAN FASA
     with tab_unbalance:
+        st.markdown(r"""
+            <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 12px; color: #334155; display: flex; justify-content: space-between; align-items: center;'>
+                <div>
+                    <b>📐 Standar PLN (Buku 3 / Standar Konstruksi Distribusi)</b>: Koefisien beban <i>a</i> = <i>I</i><sub>R</sub> / <i>I</i><sub>avg</sub>, <i>b</i> = <i>I</i><sub>S</sub> / <i>I</i><sub>avg</sub>, <i>c</i> = <i>I</i><sub>T</sub> / <i>I</i><sub>avg</sub>.
+                    <br>Rumus Ketidakseimbangan: <code>(|a - 1| + |b - 1| + |c - 1|) / 3 × 100%</code>.
+                </div>
+                <div style='background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B; padding: 4px 10px; border-radius: 6px; font-weight: 700; white-space: nowrap;'>
+                    Batas Kritis: &gt; 20%
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
         col_t2_left, col_t2_right = st.columns([3, 2])
         
         with col_t2_left:
@@ -1234,14 +1248,18 @@ elif menu_selection == "🔌 Simulasi Yanbung":
         rec_phase = min(phase_amps, key=phase_amps.get)
         min_val = phase_amps[rec_phase]
 
-        # Calculation of hypothetical unbalance
         def sim_unb(p_target):
             nr = r_amp + (added_ampere if p_target == 'R' else 0)
             ns = s_amp + (added_ampere if p_target == 'S' else 0)
             nt = t_amp + (added_ampere if p_target == 'T' else 0)
             navg = (nr + ns + nt) / 3
-            ndev = max(abs(nr - navg), abs(ns - navg), abs(nt - navg))
-            return round((ndev / navg) * 100, 2) if navg > 0 else 0.0
+            if navg > 0:
+                a_coef = nr / navg
+                b_coef = ns / navg
+                c_coef = nt / navg
+                unb = ((abs(a_coef - 1) + abs(b_coef - 1) + abs(c_coef - 1)) / 3) * 100
+                return round(unb, 2)
+            return 0.0
 
         rec_unb = sim_unb(rec_phase)
         unb_change = rec_unb - tf_unb
@@ -1308,14 +1326,18 @@ elif menu_selection == "🔌 Simulasi Yanbung":
     with col_result_panel:
         st.markdown("<div style='font-size: 14px; font-weight: 800; color: #0F172A; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;'>📊 Analisis Dampak Beban & Keseimbangan</div>", unsafe_allow_html=True)
 
-        # Calculate live simulation metrics
         new_r = r_amp + (added_ampere if target_phase == 'R' else 0)
         new_s = s_amp + (added_ampere if target_phase == 'S' else 0)
         new_t = t_amp + (added_ampere if target_phase == 'T' else 0)
 
         new_avg = (new_r + new_s + new_t) / 3
-        new_max_dev = max(abs(new_r - new_avg), abs(new_s - new_avg), abs(new_t - new_avg))
-        pred_unbalance = round((new_max_dev / new_avg) * 100, 2) if new_avg > 0 else 0.0
+        if new_avg > 0:
+            a_coef_new = new_r / new_avg
+            b_coef_new = new_s / new_avg
+            c_coef_new = new_t / new_avg
+            pred_unbalance = round(((abs(a_coef_new - 1) + abs(b_coef_new - 1) + abs(c_coef_new - 1)) / 3) * 100, 2)
+        else:
+            pred_unbalance = 0.0
 
         pred_load_kva = round(tf_cur_load + added_kva, 2)
         pred_load_pct = round((pred_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
@@ -1495,11 +1517,16 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                                           (hist_raw['V_TN'].replace(0, 230) * hist_raw['A_T_P'])) / 1000).round(2)
             max_mload = float(static_info['TF_MLoad'] or 50.0)
             hist_raw['Hist_Load_Pct'] = ((hist_raw['Hist_Load_kVA'] / max_mload) * 100).round(1) if max_mload > 0 else 0.0
-
             hist_raw['Hist_Avg_I'] = (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P']) / 3
-            hist_raw['Hist_Max_Dev'] = hist_raw[['A_R_P', 'A_S_P', 'A_T_P']].sub(hist_raw['Hist_Avg_I'], axis=0).abs().max(axis=1)
-            hist_raw['Hist_Unbalance'] = np.where(hist_raw['Hist_Avg_I'] > 0, (hist_raw['Hist_Max_Dev'] / hist_raw['Hist_Avg_I']) * 100, 0.0).round(2)
-
+            hist_raw['a_coef'] = hist_raw['A_R_P'] / hist_raw['Hist_Avg_I']
+            hist_raw['b_coef'] = hist_raw['A_S_P'] / hist_raw['Hist_Avg_I']
+            hist_raw['c_coef'] = hist_raw['A_T_P'] / hist_raw['Hist_Avg_I']
+            
+            hist_raw['Hist_Unbalance'] = np.where(
+                hist_raw['Hist_Avg_I'] > 0, 
+                (((abs(hist_raw['a_coef'] - 1) + abs(hist_raw['b_coef'] - 1) + abs(hist_raw['c_coef'] - 1)) / 3) * 100), 
+                0.0
+            ).round(2)
             # Trend Selector
             st.markdown("<div class='section-header'>📈 Grafik Tren Parameter Historis</div>", unsafe_allow_html=True)
             trend_choice = st.radio(
@@ -1811,7 +1838,6 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
             with col_m_prev:
                 st.markdown("<div style='font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 8px;'>📊 Live Preview Hasil Perhitungan</div>", unsafe_allow_html=True)
                 
-                # Live Calculations
                 if tf_phase == 1:
                     calc_load_kva = round((m_vrn * m_arp) / 1000.0, 2)
                     calc_load_pct = round((calc_load_kva / tf_mload) * 100, 1) if tf_mload > 0 else 0.0
@@ -1822,8 +1848,10 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                     
                     avg_i = (m_arp + m_asp + m_atp) / 3.0
                     if avg_i > 0:
-                        max_dev = max(abs(m_arp - avg_i), abs(m_asp - avg_i), abs(m_atp - avg_i))
-                        calc_unbalance = round((max_dev / avg_i) * 100.0, 2)
+                        a_coef_m = m_arp / avg_i
+                        b_coef_m = m_asp / avg_i
+                        c_coef_m = m_atp / avg_i
+                        calc_unbalance = round(((abs(a_coef_m - 1) + abs(b_coef_m - 1) + abs(c_coef_m - 1)) / 3) * 100.0, 2)
                     else:
                         calc_unbalance = 0.0
 
