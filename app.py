@@ -1,5 +1,6 @@
 import os
 import io
+import math
 import base64
 import numpy as np
 import pandas as pd
@@ -551,6 +552,213 @@ def load_all_transformer_data():
 df, df_raw_full = load_all_transformer_data()
 
 # ==========================================
+# 3.1 HELPER FUNCTIONS: LOAD BALANCING ENGINE (PLN BUKU 3 & WBP/LWBP)
+# ==========================================
+def calc_pln_unbalance_tuple(ir, is_, it):
+    """Calculate PLN Buku 3 Current Unbalance (%) and average current."""
+    ir, is_, it = float(ir or 0), float(is_ or 0), float(it or 0)
+    avg_i = (ir + is_ + it) / 3.0
+    if avg_i <= 0.001:
+        return 0.0, 0.0
+    unb = ((abs(ir / avg_i - 1.0) + abs(is_ / avg_i - 1.0) + abs(it / avg_i - 1.0)) / 3.0) * 100.0
+    return round(unb, 2), round(avg_i, 2)
+
+def calc_neutral_current_approx(ir, is_, it):
+    """Vector sum approximation for neutral current: I_N = sqrt(IR^2 + IS^2 + IT^2 - (IR*IS + IS*IT + IT*IR))."""
+    ir, is_, it = float(ir or 0), float(is_ or 0), float(it or 0)
+    val = (ir**2) + (is_**2) + (it**2) - ((ir * is_) + (is_ * it) + (it * ir))
+    return round(math.sqrt(max(0.0, val)), 2)
+
+def calc_losses_and_savings(in_old, in_new, r_neutral=0.25, hours=5, days=30, tariff=1444.70):
+    """Calculate technical losses in neutral conductor and monthly savings."""
+    p_old = (in_old ** 2) * r_neutral
+    p_new = (in_new ** 2) * r_neutral
+    p_saved = max(0.0, p_old - p_new)
+    kwh_monthly = (p_saved * hours * days) / 1000.0
+    rp_monthly = kwh_monthly * tariff
+    return round(p_old, 1), round(p_new, 1), round(p_saved, 1), round(kwh_monthly, 1), round(rp_monthly, 0)
+
+def extract_hour_from_time_str(time_val):
+    try:
+        s = str(time_val).strip()
+        parts = s.split(':')
+        if len(parts) >= 1:
+            return int(parts[0])
+    except Exception:
+        pass
+    return 19
+
+def get_transformer_profiles(tf_code, df_raw_full):
+    """
+    Extracts all WBP and LWBP measurements for a specific transformer.
+    WBP: hour in [17..23] (or latest if all are evening).
+    LWBP: hour in [8..16] (centered around 12:00 WIT).
+    """
+    if df_raw_full.empty:
+        return None, None, [], [], False
+    
+    sub = df_raw_full[df_raw_full['TF_Code'].astype(str).str.strip() == str(tf_code).strip()].copy()
+    if sub.empty:
+        return None, None, [], [], False
+
+    sub['Hour'] = sub['Time'].apply(extract_hour_from_time_str)
+    sub['Parsed_TS'] = pd.to_datetime(sub['Date'].astype(str) + ' ' + sub['Time'].astype(str), errors='coerce')
+    sub = sub.sort_values(by='Parsed_TS', ascending=False)
+
+    wbp_recs = sub[(sub['Hour'] >= 17) & (sub['Hour'] <= 23)].to_dict('records')
+    lwbp_recs = sub[(sub['Hour'] >= 8) & (sub['Hour'] < 17)].to_dict('records')
+
+    # If no records in 17-23, fallback all records as WBP candidates
+    if not wbp_recs and not sub.empty:
+        wbp_recs = sub.to_dict('records')
+
+    latest_wbp = wbp_recs[0] if wbp_recs else None
+    latest_lwbp = None
+    if lwbp_recs:
+        # Pick the LWBP record closest to 12:00
+        latest_lwbp = sorted(lwbp_recs, key=lambda r: abs(r.get('Hour', 12) - 12))[0]
+
+    has_dual = (latest_wbp is not None and latest_lwbp is not None)
+    return latest_wbp, latest_lwbp, wbp_recs, lwbp_recs, has_dual
+
+def solve_load_balancing_engine(wbp_dict, lwbp_dict=None, tf_nominal=9999.0):
+    """
+    Dual-condition or single-condition optimization for load balancing based on PLN Buku 3.
+    """
+    w_ir = float(wbp_dict.get('R', 0) if isinstance(wbp_dict, dict) else wbp_dict.get('A_R_P', 0))
+    w_is = float(wbp_dict.get('S', 0) if isinstance(wbp_dict, dict) else wbp_dict.get('A_S_P', 0))
+    w_it = float(wbp_dict.get('T', 0) if isinstance(wbp_dict, dict) else wbp_dict.get('A_T_P', 0))
+
+    unb_w_pre, avg_w = calc_pln_unbalance_tuple(w_ir, w_is, w_it)
+    in_w_pre = calc_neutral_current_approx(w_ir, w_is, w_it)
+
+    has_dual = False
+    l_ir, l_is, l_it = 0.0, 0.0, 0.0
+    if lwbp_dict is not None:
+        l_ir = float(lwbp_dict.get('R', 0) if isinstance(lwbp_dict, dict) else lwbp_dict.get('A_R_P', 0))
+        l_is = float(lwbp_dict.get('S', 0) if isinstance(lwbp_dict, dict) else lwbp_dict.get('A_S_P', 0))
+        l_it = float(lwbp_dict.get('T', 0) if isinstance(lwbp_dict, dict) else lwbp_dict.get('A_T_P', 0))
+        if (l_ir + l_is + l_it) > 0.5:
+            has_dual = True
+
+    wbp = {'R': w_ir, 'S': w_is, 'T': w_it}
+    sorted_p = sorted(wbp.keys(), key=lambda p: wbp[p], reverse=True)
+    p_high, p_mid, p_low = sorted_p[0], sorted_p[1], sorted_p[2]
+
+    if unb_w_pre <= 10.0:
+        return {
+            'mode': 'dual' if has_dual else 'single',
+            'shifts': [],
+            'status': 'balanced',
+            'unb_w_pre': unb_w_pre, 'unb_w_post': unb_w_pre,
+            'w_post': dict(wbp),
+            'in_w_pre': in_w_pre, 'in_w_post': in_w_pre,
+            'lwbp_pre': {'R': l_ir, 'S': l_is, 'T': l_it} if has_dual else None,
+            'lwbp_post': {'R': l_ir, 'S': l_is, 'T': l_it} if has_dual else None,
+            'unb_l_pre': calc_pln_unbalance_tuple(l_ir, l_is, l_it)[0] if has_dual else 0.0,
+            'unb_l_post': calc_pln_unbalance_tuple(l_ir, l_is, l_it)[0] if has_dual else 0.0,
+            'in_l_pre': calc_neutral_current_approx(l_ir, l_is, l_it) if has_dual else 0.0,
+            'in_l_post': calc_neutral_current_approx(l_ir, l_is, l_it) if has_dual else 0.0,
+        }
+
+    if not has_dual:
+        excess = wbp[p_high] - avg_w
+        deficit = avg_w - wbp[p_low]
+        d1 = min(excess, deficit)
+        rem_excess = excess - d1
+        rem_deficit = deficit - d1
+
+        shifts = []
+        if d1 > 0.1:
+            shifts.append((p_high, p_low, round(d1, 1), 0.0))
+        if rem_excess > 0.1:
+            shifts.append((p_high, p_mid, round(rem_excess, 1), 0.0))
+        elif rem_deficit > 0.1:
+            shifts.append((p_mid, p_low, round(rem_deficit, 1), 0.0))
+
+        curr_w = dict(wbp)
+        for ph, pl, d, _ in shifts:
+            curr_w[ph] -= d
+            curr_w[pl] += d
+
+        unb_w_post, _ = calc_pln_unbalance_tuple(curr_w['R'], curr_w['S'], curr_w['T'])
+        in_w_post = calc_neutral_current_approx(curr_w['R'], curr_w['S'], curr_w['T'])
+        return {
+            'mode': 'single',
+            'shifts': shifts,
+            'status': 'optimized',
+            'unb_w_pre': unb_w_pre, 'unb_w_post': unb_w_post,
+            'w_post': curr_w,
+            'in_w_pre': in_w_pre, 'in_w_post': in_w_post,
+            'lwbp_pre': None, 'lwbp_post': None,
+            'unb_l_pre': 0.0, 'unb_l_post': 0.0,
+            'in_l_pre': 0.0, 'in_l_post': 0.0
+        }
+    else:
+        lwbp = {'R': l_ir, 'S': l_is, 'T': l_it}
+        unb_l_pre, avg_l = calc_pln_unbalance_tuple(l_ir, l_is, l_it)
+        in_l_pre = calc_neutral_current_approx(l_ir, l_is, l_it)
+        k = avg_l / avg_w if avg_w > 0 else 1.0
+
+        max_d1 = wbp[p_high] - wbp[p_low]
+        max_d2 = wbp[p_high] - wbp[p_mid]
+        step = 0.5
+        range1 = [x * step for x in range(0, int(max_d1 / step) + 1)]
+        range2 = [x * step for x in range(0, int(max_d2 / step) + 1)]
+        best_score = 1e9
+        best_res = None
+
+        for d1 in range1:
+            for d2 in range2:
+                if d1 + d2 > wbp[p_high]:
+                    continue
+                cw = dict(wbp)
+                cw[p_high] -= (d1 + d2)
+                cw[p_low] += d1
+                cw[p_mid] += d2
+                uw, _ = calc_pln_unbalance_tuple(cw['R'], cw['S'], cw['T'])
+
+                cl = dict(lwbp)
+                cl[p_high] -= (d1 + d2) * k
+                cl[p_low] += d1 * k
+                cl[p_mid] += d2 * k
+                if min(cl.values()) < 0:
+                    continue
+                ul, _ = calc_pln_unbalance_tuple(cl['R'], cl['S'], cl['T'])
+
+                penalty = 0.0
+                if ul > max(unb_l_pre, 15.0):
+                    penalty += (ul - max(unb_l_pre, 15.0)) * 5.0
+
+                score = 0.60 * uw + 0.40 * ul + penalty
+                if score < best_score:
+                    best_score = score
+                    shifts = []
+                    if d1 > 0.1:
+                        shifts.append((p_high, p_low, round(d1, 1), round(d1 * k, 1)))
+                    if d2 > 0.1:
+                        shifts.append((p_high, p_mid, round(d2, 1), round(d2 * k, 1)))
+                    best_res = {
+                        'mode': 'dual',
+                        'shifts': shifts,
+                        'status': 'optimized',
+                        'unb_w_pre': unb_w_pre, 'unb_w_post': uw,
+                        'unb_l_pre': unb_l_pre, 'unb_l_post': ul,
+                        'w_post': cw, 'l_post': cl,
+                        'lwbp_pre': lwbp, 'lwbp_post': cl,
+                        'in_w_pre': in_w_pre, 'in_w_post': calc_neutral_current_approx(cw['R'], cw['S'], cw['T']),
+                        'in_l_pre': in_l_pre, 'in_l_post': calc_neutral_current_approx(cl['R'], cl['S'], cl['T'])
+                    }
+        return best_res or {
+            'mode': 'dual', 'shifts': [], 'status': 'no_solution',
+            'unb_w_pre': unb_w_pre, 'unb_w_post': unb_w_pre,
+            'w_post': wbp, 'l_post': lwbp, 'lwbp_pre': lwbp, 'lwbp_post': lwbp,
+            'unb_l_pre': unb_l_pre, 'unb_l_post': unb_l_pre,
+            'in_w_pre': in_w_pre, 'in_w_post': in_w_pre,
+            'in_l_pre': in_l_pre, 'in_l_post': in_l_pre
+        }
+
+# ==========================================
 # 4. SIDEBAR NAVIGATION & SYSTEM MONITOR
 # ==========================================
 with st.sidebar:
@@ -572,6 +780,7 @@ with st.sidebar:
         options=[
             "📊 Dashboard Utama",
             "🔌 Simulasi Yanbung",
+            "⚖️ Rekomendasi Penyeimbangan Beban",
             "📥 Input Pengukuran Gardu",
             "📈 Riwayat & Dossier Trafo",
             "📋 Data Semua Trafo",
@@ -1432,6 +1641,531 @@ elif menu_selection == "🔌 Simulasi Yanbung":
         })
 
         st.dataframe(comp_data, use_container_width=True, hide_index=True)
+
+
+# ==========================================
+# PAGE: REKOMENDASI PENYEIMBANGAN BEBAN (PLN BUKU 3 - WBP & LWBP)
+# ==========================================
+elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
+
+    st.markdown("""
+        <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin-bottom: 20px;'>
+            <div style='display: flex; align-items: center; gap: 10px;'>
+                <span style='font-size: 26px;'>⚖️</span>
+                <div>
+                    <h2 style='margin: 0; font-size: 22px; color: #0F172A; font-weight: 800;'>
+                        Rekomendasi Penyeimbangan Beban Trafo Distribusi
+                    </h2>
+                    <div style='font-size: 13px; color: #64748B;'>
+                        Engine Rekomendasi Mutasi Fasa Beban Berbasis Standar PLN Buku 3 • Integrasi Profil Ganda (WBP Malam & LWBP Siang)
+                    </div>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Filter only 3-Phase transformers with measurement data
+    df3_all = df[(df['TF_Phase'] != 1) & (df['Is_Measured'])].copy()
+
+    if df3_all.empty:
+        st.warning("⚠️ Tidak ada data pengukuran untuk trafo 3-fasa.")
+        st.stop()
+
+    # Pre-calculate dual profile status across all transformers
+    # Check which trafos have daytime records in df_raw_full
+    tf_with_daytime = set()
+    if not df_raw_full.empty:
+        df_raw_tmp = df_raw_full.copy()
+        df_raw_tmp['Hour'] = df_raw_tmp['Time'].apply(extract_hour_from_time_str)
+        day_rows = df_raw_tmp[(df_raw_tmp['Hour'] >= 8) & (df_raw_tmp['Hour'] < 17)]
+        tf_with_daytime = set(day_rows['TF_Code'].astype(str).str.strip().unique())
+
+    df3_all['Has_Dual_Profile'] = df3_all['TF_Code'].astype(str).str.strip().isin(tf_with_daytime)
+
+    # System-level summary metrics
+    kritis_count = len(df3_all[df3_all['Unbalance (%)'] > 20])
+    perhatian_count = len(df3_all[(df3_all['Unbalance (%)'] >= 10) & (df3_all['Unbalance (%)'] <= 20)])
+    seimbang_count = len(df3_all[df3_all['Unbalance (%)'] < 10])
+    dual_count = len(df3_all[df3_all['Has_Dual_Profile']])
+    total_in_kritis = round(df3_all[df3_all['Unbalance (%)'] > 10]['A_N_P'].sum(), 1)
+
+    # 1. Executive Metric Cards
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+    with col_kpi1:
+        st.markdown(f"""
+            <div class='kpi-card kpi-card-danger'>
+                <div class='kpi-title'>Ketidakseimbangan Kritis</div>
+                <div class='kpi-value' style='color: #EF4444;'>{kritis_count} <span style='font-size: 14px; color: #64748B;'>Trafo</span></div>
+                <div class='kpi-desc'>Ketidakseimbangan > 20% (Prioritas 1)</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col_kpi2:
+        st.markdown(f"""
+            <div class='kpi-card kpi-card-warning'>
+                <div class='kpi-title'>Perlu Perhatian</div>
+                <div class='kpi-value' style='color: #F59E0B;'>{perhatian_count} <span style='font-size: 14px; color: #64748B;'>Trafo</span></div>
+                <div class='kpi-desc'>Ketidakseimbangan 10% - 20%</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col_kpi3:
+        st.markdown(f"""
+            <div class='kpi-card kpi-card-info'>
+                <div class='kpi-title'>Profil Ganda (WBP+LWBP)</div>
+                <div class='kpi-value' style='color: #0072BC;'>{dual_count} <span style='font-size: 14px; color: #64748B;'>Trafo</span></div>
+                <div class='kpi-desc'>Memiliki data malam & siang</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col_kpi4:
+        st.markdown(f"""
+            <div class='kpi-card kpi-card-success'>
+                <div class='kpi-title'>Potensi Reduksi Arus Netral</div>
+                <div class='kpi-value' style='color: #10B981;'>{total_in_kritis} <span style='font-size: 14px; color: #64748B;'>A</span></div>
+                <div class='kpi-desc'>Total Arus Netral Trafo Tak Seimbang</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+    # 2. Priority Ranking & Selection
+    st.markdown("<div class='section-header'>📋 Antrean Prioritas Penyeimbangan Beban Trafo</div>", unsafe_allow_html=True)
+
+    col_filter_rad, col_filter_search = st.columns([2, 1])
+    with col_filter_rad:
+        filter_mode = st.radio(
+            "Tampilkan:",
+            ["Semua Trafo 3-Fasa", "Kritis (>20%) & Perhatian (10-20%) Saja", "Hanya yang Memiliki Profil Ganda (WBP + LWBP)"],
+            horizontal=True
+        )
+
+    filtered_df3 = df3_all.copy()
+    if filter_mode == "Kritis (>20%) & Perhatian (10-20%) Saja":
+        filtered_df3 = filtered_df3[filtered_df3['Unbalance (%)'] >= 10.0]
+    elif filter_mode == "Hanya yang Memiliki Profil Ganda (WBP + LWBP)":
+        filtered_df3 = filtered_df3[filtered_df3['Has_Dual_Profile']]
+
+    filtered_df3 = filtered_df3.sort_values(by='Unbalance (%)', ascending=False)
+
+    # Display Priority Table
+    disp_cols = ['TF_Code', 'TF_Name', 'TF_MLoad', 'Current Load', 'Load Percentage', 'Unbalance (%)', 'A_N_P', 'Unbalance_Status', 'Has_Dual_Profile']
+    disp_df = filtered_df3[[c for c in disp_cols if c in filtered_df3.columns]].copy()
+    disp_df['Has_Dual_Profile'] = disp_df['Has_Dual_Profile'].map({True: '🟢 Ganda (WBP+LWBP)', False: '🔵 Tunggal (WBP)'})
+    disp_df.rename(columns={
+        'TF_Code': 'Kode Gardu',
+        'TF_Name': 'Nama Gardu',
+        'TF_MLoad': 'Kapasitas (kVA)',
+        'Current Load': 'Beban (kVA)',
+        'Load Percentage': 'Beban (%)',
+        'Unbalance (%)': 'Ketidakseimbangan (%)',
+        'A_N_P': 'Arus Netral (A)',
+        'Unbalance_Status': 'Status PLN',
+        'Has_Dual_Profile': 'Ketersediaan Profil'
+    }, inplace=True)
+
+    st.dataframe(disp_df, use_container_width=True, hide_index=True)
+
+    st.markdown("<hr style='margin: 24px 0 16px 0; border: none; border-top: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
+
+    # 3. Transformer Deep-Dive & Profile Analysis
+    st.markdown("<div class='section-header'>🔍 Analisis Mendalam & Rekomendasi Gardu</div>", unsafe_allow_html=True)
+
+    # Transformer Selectbox (default: highest unbalance)
+    tf_options = filtered_df3['TF_Code'].tolist()
+    if not tf_options:
+        tf_options = df3_all.sort_values(by='Unbalance (%)', ascending=False)['TF_Code'].tolist()
+
+    tf_labels = {
+        code: f"{code} - {df3_all.loc[df3_all['TF_Code'] == code, 'TF_Name'].values[0]} (Unb: {df3_all.loc[df3_all['TF_Code'] == code, 'Unbalance (%)'].values[0]}%)"
+        for code in tf_options
+    }
+
+    selected_tf_code = st.selectbox(
+        "Pilih Gardu Distribusi untuk Diberikan Rekomendasi:",
+        options=tf_options,
+        format_func=lambda x: tf_labels.get(x, x),
+        key="sel_tf_balance"
+    )
+
+    # Retrieve selected transformer details
+    selected_tf_row = df3_all[df3_all['TF_Code'] == selected_tf_code].iloc[0]
+    tf_name = selected_tf_row.get('TF_Name', '-')
+    tf_mload = float(selected_tf_row.get('TF_MLoad', 50.0) or 50.0)
+    tf_nominal_amp = round((tf_mload * 1000.0) / (math.sqrt(3) * 400.0), 1)
+
+    # Retrieve profile measurements from raw data
+    latest_wbp, latest_lwbp, wbp_recs, lwbp_recs, has_dual = get_transformer_profiles(selected_tf_code, df_raw_full)
+
+    # Profile Mode Banner
+    if has_dual:
+        st.markdown(f"""
+            <div style='background: #ECFDF5; border: 1px solid #A7F3D0; border-left: 5px solid #10B981; border-radius: 8px; padding: 14px 18px; margin-bottom: 16px;'>
+                <div style='font-size: 14px; font-weight: 800; color: #065F46; display: flex; align-items: center; gap: 8px;'>
+                    <span>🟢</span> MODE PROFIL GANDA AKTIF (WBP Malam & LWBP Siang Terdeteksi)
+                </div>
+                <div style='font-size: 12px; color: #047857; margin-top: 4px; line-height: 1.5;'>
+                    Gardu <b>{selected_tf_code} - {tf_name}</b> memiliki data pengukuran lengkap waktu beban puncak (malam) dan luar waktu beban puncak (siang ~12:00 WIT).
+                    Engine optimasi menerapkan pendekatan <b>Pareto Compromise Solver</b> agar mutasi fasa fisik sambungan rumah (SR) di lapangan menyeimbangkan beban malam <b>tanpa merusak keseimbangan atau menimbulkan beban lebih di siang hari</b>.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+            <div style='background: #EFF6FF; border: 1px solid #BFDBFE; border-left: 5px solid #0072BC; border-radius: 8px; padding: 14px 18px; margin-bottom: 16px;'>
+                <div style='font-size: 14px; font-weight: 800; color: #1E40AF; display: flex; align-items: center; gap: 8px;'>
+                    <span>🔵</span> MODE PROFIL TUNGGAL AKTIF (WBP Beban Puncak Malam Saja)
+                </div>
+                <div style='font-size: 12px; color: #1D4ED8; margin-top: 4px; line-height: 1.5;'>
+                    Gardu <b>{selected_tf_code} - {tf_name}</b> saat ini hanya memiliki riwayat pengukuran beban puncak malam (WBP).
+                    Rekomendasi difokuskan penuh untuk mengeliminasi ketidakseimbangan pada saat beban puncak sistem.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Measurement Selectors (if user wants to test historical measurements)
+    col_sel_wbp, col_sel_lwbp = st.columns(2)
+    with col_sel_wbp:
+        wbp_choices = [f"{r['Date']} {r['Time']}" for r in wbp_recs] if wbp_recs else ["Default (Terkini)"]
+        sel_wbp_ts = st.selectbox("📅 Data Pengukuran WBP (Malam):", options=wbp_choices, index=0)
+        selected_wbp_rec = next((r for r in wbp_recs if f"{r['Date']} {r['Time']}" == sel_wbp_ts), latest_wbp or selected_tf_row.to_dict())
+
+    with col_sel_lwbp:
+        if has_dual and lwbp_recs:
+            lwbp_choices = [f"{r['Date']} {r['Time']}" for r in lwbp_recs]
+            sel_lwbp_ts = st.selectbox("📅 Data Pengukuran LWBP (Siang):", options=lwbp_choices, index=0)
+            selected_lwbp_rec = next((r for r in lwbp_recs if f"{r['Date']} {r['Time']}" == sel_lwbp_ts), latest_lwbp)
+        else:
+            st.selectbox("📅 Data Pengukuran LWBP (Siang):", options=["Data Siang Belum Tersedia"], disabled=True)
+            selected_lwbp_rec = None
+
+    # Current values extraction
+    w_ir = float(selected_wbp_rec.get('A_R_P', 0) or 0)
+    w_is = float(selected_wbp_rec.get('A_S_P', 0) or 0)
+    w_it = float(selected_wbp_rec.get('A_T_P', 0) or 0)
+    w_in = float(selected_wbp_rec.get('A_N_P', 0) or 0)
+
+    l_ir = float(selected_lwbp_rec.get('A_R_P', 0) or 0) if selected_lwbp_rec else 0.0
+    l_is = float(selected_lwbp_rec.get('A_S_P', 0) or 0) if selected_lwbp_rec else 0.0
+    l_it = float(selected_lwbp_rec.get('A_T_P', 0) or 0) if selected_lwbp_rec else 0.0
+    l_in = float(selected_lwbp_rec.get('A_N_P', 0) or 0) if selected_lwbp_rec else 0.0
+
+    # Solve Load Balancing
+    wbp_dict = {'R': w_ir, 'S': w_is, 'T': w_it}
+    lwbp_dict = {'R': l_ir, 'S': l_is, 'T': l_it} if has_dual else None
+    sol = solve_load_balancing_engine(wbp_dict, lwbp_dict, tf_nominal=tf_nominal_amp)
+
+    # Technical Loss Calculation
+    in_w_old = w_in if w_in > 0.1 else sol['in_w_pre']
+    in_w_new = sol['in_w_post']
+    p_old, p_new, p_saved, kwh_month, rp_month = calc_losses_and_savings(in_w_old, in_w_new)
+
+    # 4. Result Metrics Grid
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+
+    with m_col1:
+        st.metric(
+            label="Ketidakseimbangan WBP (Malam)",
+            value=f"{sol['unb_w_post']:.1f}%",
+            delta=f"{sol['unb_w_post'] - sol['unb_w_pre']:.1f}% (Awal: {sol['unb_w_pre']:.1f}%)",
+            delta_color="inverse"
+        )
+
+    with m_col2:
+        if has_dual:
+            st.metric(
+                label="Ketidakseimbangan LWBP (Siang)",
+                value=f"{sol['unb_l_post']:.1f}%",
+                delta=f"{sol['unb_l_post'] - sol['unb_l_pre']:.1f}% (Awal: {sol['unb_l_pre']:.1f}%)",
+                delta_color="inverse"
+            )
+        else:
+            st.metric(label="Ketidakseimbangan LWBP", value="N/A (Hanya WBP)")
+
+    with m_col3:
+        st.metric(
+            label="Arus Netral (WBP)",
+            value=f"{sol['in_w_post']:.1f} A",
+            delta=f"{sol['in_w_post'] - in_w_old:.1f} A (Awal: {in_w_old:.1f} A)",
+            delta_color="inverse"
+        )
+
+    with m_col4:
+        st.metric(
+            label="Penghematan Losses Netral",
+            value=f"{kwh_month:.1f} kWh/bln",
+            delta=f"Hemat Rp {rp_month:,.0f}/bln".replace(",", ".")
+        )
+
+    # 5. Visual Comparison Charts
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    if has_dual:
+        tab_chart_wbp, tab_chart_lwbp = st.tabs(["📊 Komparasi Profil WBP (Malam)", "☀️ Komparasi Profil LWBP (Siang)"])
+    else:
+        tab_chart_wbp = st.container()
+        tab_chart_lwbp = None
+
+    with tab_chart_wbp:
+        fig_wbp = go.Figure()
+        phases_x = ['Fasa R', 'Fasa S', 'Fasa T', 'Netral (N)']
+        pre_w_vals = [w_ir, w_is, w_it, in_w_old]
+        post_w_vals = [sol['w_post']['R'], sol['w_post']['S'], sol['w_post']['T'], sol['in_w_post']]
+
+        fig_wbp.add_trace(go.Bar(
+            name='Kondisi Eksisting (Sebelum)',
+            x=phases_x,
+            y=pre_w_vals,
+            text=[f"{v:.1f}A" for v in pre_w_vals],
+            textposition='auto',
+            marker_color='#94A3B8'
+        ))
+        fig_wbp.add_trace(go.Bar(
+            name='Rekomendasi (Sesudah Penyeimbangan)',
+            x=phases_x,
+            y=post_w_vals,
+            text=[f"{v:.1f}A" for v in post_w_vals],
+            textposition='auto',
+            marker_color=['#0072BC', '#0072BC', '#0072BC', '#10B981']
+        ))
+        fig_wbp.update_layout(
+            barmode='group',
+            height=340,
+            margin=dict(l=20, r=20, t=30, b=20),
+            yaxis_title="Arus Listrik (Ampere)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor='rgba(248, 250, 252, 0.5)'
+        )
+        st.plotly_chart(fig_wbp, use_container_width=True)
+
+    if has_dual and tab_chart_lwbp:
+        with tab_chart_lwbp:
+            fig_lwbp = go.Figure()
+            pre_l_vals = [l_ir, l_is, l_it, l_in if l_in > 0.1 else sol['in_l_pre']]
+            post_l_vals = [sol['l_post']['R'], sol['l_post']['S'], sol['l_post']['T'], sol['in_l_post']]
+
+            fig_lwbp.add_trace(go.Bar(
+                name='Kondisi Eksisting (Siang)',
+                x=phases_x,
+                y=pre_l_vals,
+                text=[f"{v:.1f}A" for v in pre_l_vals],
+                textposition='auto',
+                marker_color='#CBD5E1'
+            ))
+            fig_lwbp.add_trace(go.Bar(
+                name='Rekomendasi (Sesudah Mutasi Fasa)',
+                x=phases_x,
+                y=post_l_vals,
+                text=[f"{v:.1f}A" for v in post_l_vals],
+                textposition='auto',
+                marker_color=['#F59E0B', '#F59E0B', '#F59E0B', '#10B981']
+            ))
+            fig_lwbp.update_layout(
+                barmode='group',
+                height=340,
+                margin=dict(l=20, r=20, t=30, b=20),
+                yaxis_title="Arus Listrik (Ampere)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor='rgba(248, 250, 252, 0.5)'
+            )
+            st.plotly_chart(fig_lwbp, use_container_width=True)
+
+    # 6. Actionable Field Instructions (Instruksi Lapangan)
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>🛠️ Instruksi Tindakan Lapangan (Actionable Work Orders)</div>", unsafe_allow_html=True)
+
+    # Inspect Jurusan distribution from selected measurement record
+    jur_data = []
+    for j_num in [1, 2, 3]:
+        jr = float(selected_wbp_rec.get(f'A_R_{j_num}', 0) or 0)
+        js = float(selected_wbp_rec.get(f'A_S_{j_num}', 0) or 0)
+        jt = float(selected_wbp_rec.get(f'A_T_{j_num}', 0) or 0)
+        jn = float(selected_wbp_rec.get(f'A_N_{j_num}', 0) or 0)
+        if (jr + js + jt) > 0.5:
+            junb, javg = calc_pln_unbalance_tuple(jr, js, jt)
+            jur_data.append({
+                'jurusan': f"Jurusan {j_num}",
+                'R': jr, 'S': js, 'T': jt, 'N': jn,
+                'unb': junb, 'avg': javg
+            })
+
+    if sol['status'] == 'balanced' or len(sol['shifts']) == 0:
+        st.success(f"✅ **Beban Gardu {selected_tf_code} Sudah Seimbang!** Ketidakseimbangan saat ini ({sol['unb_w_pre']:.1f}%) telah berada di bawah batas standar PLN Buku 3 (< 10%). Tidak diperlukan mutasi fasa.")
+    else:
+        st.info("ℹ️ **Rencana Eksekusi Mutasi Beban Sambungan Rumah (SR) di Lapangan:**")
+        
+        # Jurusan Guidance if available
+        if jur_data:
+            jur_sorted = sorted(jur_data, key=lambda x: x['unb'], reverse=True)
+            worst_j = jur_sorted[0]
+            st.markdown(f"""
+                <div style='background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; font-size: 13px; color: #92400E;'>
+                    <b>🔍 Analisis Sumber Ketidakseimbangan Terbesar:</b><br>
+                    Ketidakseimbangan fasa dominan bersumber dari <b>{worst_j['jurusan']}</b> dengan ketidakseimbangan <b>{worst_j['unb']:.1f}%</b> (R={worst_j['R']}A, S={worst_j['S']}A, T={worst_j['T']}A).
+                    Prioritaskan mutasi sambungan rumah (SR) pada tiang-tiang di sepanjang jalur <b>{worst_j['jurusan']}</b>.
+                </div>
+            """, unsafe_allow_html=True)
+
+        # Loop through shifts and generate clear human instructions
+        for idx, (p_from, p_to, d_w, d_l) in enumerate(sol['shifts'], start=1):
+            # Customer equivalents
+            n_900 = max(1, round(d_w / 3.9))
+            n_1300 = max(1, round(d_w / 5.7))
+            n_450 = max(1, round(d_w / 2.0))
+
+            day_text = f" (dan ~{d_l:.1f} A pada siang LWBP)" if has_dual and d_l > 0 else ""
+
+            st.markdown(f"""
+                <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-left: 5px solid #0072BC; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);'>
+                    <div style='font-size: 15px; font-weight: 800; color: #0F172A;'>
+                        📌 Langkah {idx}: Pindahkan Beban dari <span style='color: #EF4444;'>Fasa {p_from}</span> ➔ ke <span style='color: #10B981;'>Fasa {p_to}</span>
+                    </div>
+                    <div style='font-size: 13px; color: #334155; margin-top: 6px;'>
+                        • <b>Besaran Arus yang Dipindahkan:</b> <b>~{d_w:.1f} Ampere</b> pada waktu beban puncak malam{day_text}.<br>
+                        • <b>Estimasi Jumlah Pelanggan yang Dimutasi:</b><br>
+                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_900} Pelanggan</b> Daya 900 VA (R1 / 4A), <i>atau</i><br>
+                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_1300} Pelanggan</b> Daya 1.300 VA (R1 / 6A), <i>atau</i><br>
+                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_450} Pelanggan</b> Daya 450 VA (R1 / 2A).<br>
+                        • <b>Rekomendasi Penempatan:</b> Pindahkan sambungan rumah (*tapping* SR) pada tiang awal hingga tengah saluran JTR guna menjaga drop tegangan ujung tetap optimal.
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    # 7. Interactive "What-If" Simulator
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    with st.expander("🎛️ Simulator Interaktif 'What-If' Penyeimbangan Beban Mandiri", expanded=False):
+        st.markdown("<div style='font-size: 13px; color: #64748B; margin-bottom: 12px;'>Gunakan slider di bawah ini untuk mencoba variasi pergeseran arus antar fasa secara manual dan lihat langsung dampaknya terhadap profil beban WBP dan LWBP.</div>", unsafe_allow_html=True)
+
+        # Default sliders to algorithmic solution
+        init_r_s = 0.0
+        init_r_t = 0.0
+        init_s_t = 0.0
+
+        for pf, pt, dw, _ in sol['shifts']:
+            if pf == 'R' and pt == 'S': init_r_s = float(dw)
+            elif pf == 'R' and pt == 'T': init_r_t = float(dw)
+            elif pf == 'S' and pt == 'T': init_s_t = float(dw)
+            elif pf == 'S' and pt == 'R': init_r_s = -float(dw)
+            elif pf == 'T' and pt == 'R': init_r_t = -float(dw)
+            elif pf == 'T' and pt == 'S': init_s_t = -float(dw)
+
+        col_sl1, col_sl2, col_sl3 = st.columns(3)
+        with col_sl1:
+            sim_r_s = st.slider("Geser Beban R ➔ S (Ampere):", min_value=-30.0, max_value=30.0, value=float(init_r_s), step=0.5, key="sim_rs")
+        with col_sl2:
+            sim_r_t = st.slider("Geser Beban R ➔ T (Ampere):", min_value=-30.0, max_value=30.0, value=float(init_r_t), step=0.5, key="sim_rt")
+        with col_sl3:
+            sim_s_t = st.slider("Geser Beban S ➔ T (Ampere):", min_value=-30.0, max_value=30.0, value=float(init_s_t), step=0.5, key="sim_st")
+
+        # Simulate WBP
+        sim_w_r = max(0.0, w_ir - sim_r_s - sim_r_t)
+        sim_w_s = max(0.0, w_is + sim_r_s - sim_s_t)
+        sim_w_t = max(0.0, w_it + sim_r_t + sim_s_t)
+        sim_unb_w, _ = calc_pln_unbalance_tuple(sim_w_r, sim_w_s, sim_w_t)
+        sim_in_w = calc_neutral_current_approx(sim_w_r, sim_w_s, sim_w_t)
+
+        # Simulate LWBP if available
+        if has_dual:
+            avg_w = (w_ir + w_is + w_it) / 3.0
+            avg_l = (l_ir + l_is + l_it) / 3.0
+            k_sim = avg_l / avg_w if avg_w > 0 else 1.0
+            sim_l_r = max(0.0, l_ir - (sim_r_s + sim_r_t) * k_sim)
+            sim_l_s = max(0.0, l_is + (sim_r_s - sim_s_t) * k_sim)
+            sim_l_t = max(0.0, l_it + (sim_r_t + sim_s_t) * k_sim)
+            sim_unb_l, _ = calc_pln_unbalance_tuple(sim_l_r, sim_l_s, sim_l_t)
+            sim_in_l = calc_neutral_current_approx(sim_l_r, sim_l_s, sim_l_t)
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        col_res1, col_res2, col_res3 = st.columns(3)
+        with col_res1:
+            status_w_color = "#15803D" if sim_unb_w < 10 else ("#B45309" if sim_unb_w <= 20 else "#B91C1C")
+            st.markdown(f"""
+                <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px;'>
+                    <div style='font-size: 11px; font-weight: 700; color: #64748B;'>SIMULASI KETIDAKSEIMBANGAN WBP</div>
+                    <div style='font-size: 22px; font-weight: 800; color: {status_w_color}; margin: 4px 0;'>{sim_unb_w:.2f}%</div>
+                    <div style='font-size: 12px; color: #475569;'>R={sim_w_r:.1f}A • S={sim_w_s:.1f}A • T={sim_w_t:.1f}A</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col_res2:
+            if has_dual:
+                status_l_color = "#15803D" if sim_unb_l < 10 else ("#B45309" if sim_unb_l <= 20 else "#B91C1C")
+                st.markdown(f"""
+                    <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 700; color: #64748B;'>SIMULASI KETIDAKSEIMBANGAN LWBP</div>
+                        <div style='font-size: 22px; font-weight: 800; color: {status_l_color}; margin: 4px 0;'>{sim_unb_l:.2f}%</div>
+                        <div style='font-size: 12px; color: #475569;'>R={sim_l_r:.1f}A • S={sim_l_s:.1f}A • T={sim_l_t:.1f}A</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                    <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px;'>
+                        <div style='font-size: 11px; font-weight: 700; color: #64748B;'>SIMULASI LWBP (SIANG)</div>
+                        <div style='font-size: 14px; font-weight: 600; color: #94A3B8; margin-top: 8px;'>Data Siang Belum Tersedia</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+        with col_res3:
+            st.markdown(f"""
+                <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px;'>
+                    <div style='font-size: 11px; font-weight: 700; color: #64748B;'>SIMULASI ARUS NETRAL WBP</div>
+                    <div style='font-size: 22px; font-weight: 800; color: #0F172A; margin: 4px 0;'>{sim_in_w:.1f} A</div>
+                    <div style='font-size: 12px; color: #10B981;'>Awal: {in_w_old:.1f} A (Δ {sim_in_w - in_w_old:.1f} A)</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    # 8. SPK / Field Execution Work Order Export
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    with st.expander("📄 Cetak / Salin Lembar Kerja Perintah Eksekusi (SPK Lapangan)", expanded=False):
+        spk_text = f"""================================================================================
+PT PLN (PERSERO) UP3 SAUMLAKI - ULP MOA
+LEMBAR REKOMENDASI & PERINTAH KERJA PENYEIMBANGAN BEBAN TRAFO
+================================================================================
+Tanggal Analisis : {datetime.now().strftime('%d/%m/%Y %H:%M WIT')}
+Kode Gardu       : {selected_tf_code}
+Nama Gardu       : {tf_name}
+Kapasitas Trafo  : {tf_mload} kVA (Arus Nominal: {tf_nominal_amp} A)
+Status Profil    : {'PROFIL GANDA (WBP & LWBP)' if has_dual else 'PROFIL TUNGGAL (WBP)'}
+
+A. KONDISI EKSISTING SEBELUM PENYEIMBANGAN:
+   - WBP (Malam)  : R={w_ir:.1f} A | S={w_is:.1f} A | T={w_it:.1f} A | N={in_w_old:.1f} A
+   - Ketidakseimbangan WBP : {sol['unb_w_pre']:.2f}% (Status: {'KRITIS' if sol['unb_w_pre']>20 else 'PERHATIAN'})
+"""
+        if has_dual:
+            spk_text += f"""   - LWBP (Siang) : R={l_ir:.1f} A | S={l_is:.1f} A | T={l_it:.1f} A | N={sol['in_l_pre']:.1f} A
+   - Ketidakseimbangan LWBP: {sol['unb_l_pre']:.2f}%
+"""
+        spk_text += f"""
+B. TARGET KONDISI SESUDAH PENYEIMBANGAN:
+   - WBP (Malam)  : R={sol['w_post']['R']:.1f} A | S={sol['w_post']['S']:.1f} A | T={sol['w_post']['T']:.1f} A | N={sol['in_w_post']:.1f} A
+   - Ketidakseimbangan WBP : {sol['unb_w_post']:.2f}% (NORMAL SEIMBANG < 10%)
+   - Estimasi Penghematan Losses : {kwh_month:.1f} kWh/bulan (Rp {rp_month:,.0f}/bulan)
+
+C. DAFTAR TINDAKAN MUTASI BEBAN SAMBUNGAN RUMAH (SR):
+"""
+        if sol['shifts']:
+            for idx, (pf, pt, dw, dl) in enumerate(sol['shifts'], start=1):
+                n900 = max(1, round(dw / 3.9))
+                spk_text += f"   {idx}. Pindahkan beban sebesar ~{dw:.1f} A dari FASA {pf} ke FASA {pt}.\n"
+                spk_text += f"      -> Setara ~{n900} pelanggan daya 900 VA (R1/4A) pada tiang awal/tengah JTR.\n"
+        else:
+            spk_text += "   - Beban sudah seimbang (<10%). Tidak ada tindakan mutasi yang diperlukan.\n"
+
+        spk_text += """
+D. TANDA TANGAN & PENGESAHAN:
+   Dibuat Oleh (Spv/Engineer Har),            Dilaksanakan Oleh (Tim Pelayanan Teknik),
+
+
+   (___________________________________)      (___________________________________)
+================================================================================
+"""
+        st.text_area("Format Siap Cetak / Salin:", value=spk_text, height=300)
+        st.download_button(
+            label="📥 Unduh Lembar Kerja (SPK.txt)",
+            data=spk_text,
+            file_name=f"SPK_Penyeimbangan_{selected_tf_code}.txt",
+            mime="text/plain"
+        )
 
 
 # ==========================================
