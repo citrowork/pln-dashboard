@@ -375,10 +375,54 @@ def load_all_transformer_data():
 
         if df_info.empty:
             st.error("Sheet INFO_DATA kosong atau tidak dapat diakses.")
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         # Clean TF_Code
         df_info['TF_Code'] = df_info['TF_Code'].astype(str).str.strip()
+
+        # 3. Fetch DATA_PEL (Customer GIS & Power Database)
+        try:
+            pel_ws = sh.worksheet("DATA_PEL")
+            pel_records = pel_ws.get_all_records()
+            df_pel = pd.DataFrame(pel_records)
+        except Exception as e_pel:
+            df_pel = pd.DataFrame()
+
+        # Process and clean customer data
+        if not df_pel.empty and 'TF_CODE' in df_pel.columns and 'DAYA' in df_pel.columns:
+            df_pel['TF_CODE'] = df_pel['TF_CODE'].astype(str).str.strip()
+            df_pel['IDPEL'] = df_pel['IDPEL'].astype(str).str.strip()
+            df_pel['DAYA'] = pd.to_numeric(df_pel['DAYA'], errors='coerce').fillna(0)
+
+            # Vectorized coordinate parsing with automatic lat/lon swap detection (Moa / MBD region)
+            if 'KOORDINAT_X' in df_pel.columns and 'KOORDINAT_Y' in df_pel.columns:
+                x_num = pd.to_numeric(df_pel['KOORDINAT_X'].astype(str).str.replace(',', '.'), errors='coerce')
+                y_num = pd.to_numeric(df_pel['KOORDINAT_Y'].astype(str).str.replace(',', '.'), errors='coerce')
+                cond_direct = (x_num >= -9.5) & (x_num <= -6.5) & (y_num >= 126.0) & (y_num <= 132.0)
+                cond_swapped = (y_num >= -9.5) & (y_num <= -6.5) & (x_num >= 126.0) & (x_num <= 132.0)
+                df_pel['latitude'] = np.where(cond_direct, x_num, np.where(cond_swapped, y_num, np.nan))
+                df_pel['longitude'] = np.where(cond_direct, y_num, np.where(cond_swapped, x_num, np.nan))
+            else:
+                df_pel['latitude'] = np.nan
+                df_pel['longitude'] = np.nan
+
+            # Aggregate per transformer
+            pel_agg = df_pel.groupby('TF_CODE').agg(
+                Total_Pelanggan=('IDPEL', 'count'),
+                Total_Daya_kVA=('DAYA', lambda x: round(x.sum() / 1000.0, 2)),
+                Avg_Daya_VA=('DAYA', lambda x: round(x.mean(), 0))
+            ).reset_index()
+
+            df_info = pd.merge(df_info, pel_agg, left_on='TF_Code', right_on='TF_CODE', how='left')
+            df_info['Total_Pelanggan'] = df_info['Total_Pelanggan'].fillna(0).astype(int)
+            df_info['Total_Daya_kVA'] = df_info['Total_Daya_kVA'].fillna(0.0)
+            df_info['Avg_Daya_VA'] = df_info['Avg_Daya_VA'].fillna(0.0)
+            if 'TF_CODE' in df_info.columns:
+                df_info.drop(columns=['TF_CODE'], inplace=True, errors='ignore')
+        else:
+            df_info['Total_Pelanggan'] = 0
+            df_info['Total_Daya_kVA'] = 0.0
+            df_info['Avg_Daya_VA'] = 0.0
 
         # Deduplicate RAW_MEA to isolate the latest measurement per transformer
         if not df_raw.empty:
@@ -534,6 +578,7 @@ def load_all_transformer_data():
         # Order key columns in front
         priority_cols = [
             'TF_Code', 'TF_Name', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+            'Total_Pelanggan', 'Total_Daya_kVA', 'Avg_Daya_VA',
             'Measurement_Status', 'Load_Status', 'Load Percentage', 'Current Load',
             'Unbalance_Status', 'Unbalance (%)', 'Health Score', 'Date', 'Time',
             'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN', 'TF_Coordinate'
@@ -542,18 +587,33 @@ def load_all_transformer_data():
         other_cols = [c for c in df.columns if c not in priority_cols]
         df = df[priority_cols + other_cols]
 
-        return df, df_raw
+        return df, df_raw, df_pel
 
     except Exception as err:
         st.error(f"Gagal memuat data dari Google Sheets: {err}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # Load data into session
-df, df_raw_full = load_all_transformer_data()
+df, df_raw_full, df_pel_full = load_all_transformer_data()
 
 # ==========================================
-# 3.1 HELPER FUNCTIONS: LOAD BALANCING ENGINE (PLN BUKU 3 & WBP/LWBP)
+# 3.1 HELPER FUNCTIONS: LOAD BALANCING ENGINE & GIS DISTANCE
 # ==========================================
+def calc_haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Vectorized Haversine distance in meters between points (lat1, lon1) and (lat2, lon2).
+    Supports scalar vs series or series vs series.
+    """
+    R = 6371000.0  # Earth radius in meters
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(lat2)
+    delta_phi = np.radians(lat2 - lat1)
+    delta_lambda = np.radians(lon2 - lon1)
+
+    a = np.sin(delta_phi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2.0) ** 2
+    c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    return R * c
+
 def calc_pln_unbalance_tuple(ir, is_, it):
     """Calculate PLN Buku 3 Current Unbalance (%) and average current."""
     ir, is_, it = float(ir or 0), float(is_ or 0), float(it or 0)
@@ -2089,6 +2149,28 @@ Prognosa Akhir: {post_to:.1f} A ✅
 </div>
 </div>""", unsafe_allow_html=True)
 
+            # Rekomendasi IDPEL Pelanggan Tiang Pangkal (<150m) jika data pelanggan tersedia
+            if not df_pel_full.empty:
+                pel_sel_tf = df_pel_full[df_pel_full['TF_CODE'].astype(str).str.strip() == str(selected_tf_code).strip()].copy()
+                if not pel_sel_tf.empty and pd.notna(selected_tf_row.get('latitude')) and pd.notna(selected_tf_row.get('longitude')):
+                    pel_valid = pel_sel_tf[pel_sel_tf['latitude'].notna() & pel_sel_tf['longitude'].notna()].copy()
+                    if not pel_valid.empty:
+                        pel_valid['dist_m'] = calc_haversine_distance(
+                            selected_tf_row['latitude'], selected_tf_row['longitude'],
+                            pel_valid['latitude'], pel_valid['longitude']
+                        )
+                        candidates = pel_valid[pel_valid['dist_m'] <= 150].sort_values(by='dist_m')
+                        if not candidates.empty:
+                            c_items = []
+                            for _, r_cand in candidates.head(4).iterrows():
+                                c_items.append(f"<span style='background:#E2E8F0; padding:3px 7px; border-radius:5px; font-weight:600;'>IDPEL {r_cand['IDPEL']} ({int(r_cand['DAYA'])} VA &bull; {r_cand['dist_m']:.0f}m)</span>")
+                            c_str = " ".join(c_items)
+                            st.markdown(f"""<div style='background: #F8FAFC; border: 1.5px dashed #94A3B8; border-radius: 8px; padding: 10px 14px; margin-top: 8px; font-size: 12px; color: #334155;'>
+🎯 <b>Kandidat IDPEL Tiang Pangkal (&le;150m) untuk Mutasi Beban:</b>
+<div style='margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px;'>{c_str}</div>
+<div style='font-size: 11px; color: #64748B; margin-top: 6px;'>*Rekomendasi teknis: Geser sambungan kawat SR pelanggan terdekat di atas dari <b>{meta_from["name"]}</b> ke <b>{meta_to["name"]}</b> pada terminal tiang awal/papan hubung bagi trafo.</div>
+</div>""", unsafe_allow_html=True)
+
             st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
         # B. Tabel Matriks Prognosa Fasa Lengkap (Sebelum vs Sesudah)
@@ -2184,13 +2266,15 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                     <div style='font-size: 24px; font-weight: 800; color: #0F172A; margin: 4px 0 12px 0;'>
                         {static_info['TF_Name']} <span style='font-size:16px; color:#64748B;'>({selected_code})</span>
                     </div>
-                    <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; font-size: 13px;'>
+                    <div style='display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; font-size: 13px;'>
                         <div><b>Unit Layanan:</b> {static_info.get('TF_Unit', '-')}</div>
                         <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
                         <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
                         <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
                         <div><b>Beban Terakhir:</b> {static_info.get('Load Percentage', '-')}%</div>
                         <div><b>Unbalance:</b> {static_info.get('Unbalance (%)', '-')}%</div>
+                        <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg</div>
+                        <div><b>Daya Kontrak:</b> {float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA</div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
@@ -2209,107 +2293,375 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                     </div>
                 """, unsafe_allow_html=True)
 
-        if hist_raw.empty:
-            st.warning("⚠️ Gardu ini belum memiliki catatan riwayat pengukuran di sheet RAW_MEA.")
-        else:
-            # Process history data
-            hist_raw['Parsed_Time'] = pd.to_datetime(
-                hist_raw['Date'].astype(str) + ' ' + hist_raw['Time'].astype(str),
-                errors='coerce'
-            )
-            hist_raw = hist_raw.sort_values(by='Parsed_Time', ascending=True)
-            hist_raw['Timestamp_Str'] = hist_raw['Date'].astype(str) + ' ' + hist_raw['Time'].astype(str)
-
-            for c in ['A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN', 'THD_R_P', 'THD_S_P', 'THD_T_P']:
-                if c in hist_raw.columns:
-                    hist_raw[c] = pd.to_numeric(hist_raw[c], errors='coerce').fillna(0)
-
-            # Standar Listrik PLN: Tegangan Nominal 230V
-            if int(static_info.get('TF_Phase', 3) or 3) == 1:
-                hist_raw['Hist_Load_kVA'] = ((230.0 * hist_raw['A_R_P']) / 1000.0).round(2)
+        # Prepare customer GIS and distance data
+        pel_tf = pd.DataFrame()
+        has_coords = pd.notna(static_info.get('latitude')) and pd.notna(static_info.get('longitude'))
+        if not df_pel_full.empty:
+            pel_tf = df_pel_full[df_pel_full['TF_CODE'].astype(str).str.strip() == str(selected_code).strip()].copy()
+            if not pel_tf.empty and has_coords:
+                pel_tf_valid = pel_tf[pel_tf['latitude'].notna() & pel_tf['longitude'].notna()].copy()
+                if not pel_tf_valid.empty:
+                    pel_tf.loc[pel_tf_valid.index, 'dist_m'] = calc_haversine_distance(
+                        static_info['latitude'], static_info['longitude'],
+                        pel_tf_valid['latitude'], pel_tf_valid['longitude']
+                    )
+                else:
+                    pel_tf['dist_m'] = np.nan
             else:
-                hist_raw['Hist_Load_kVA'] = ((230.0 * (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P'])) / 1000.0).round(2)
-            max_mload = float(static_info['TF_MLoad'] or 50.0)
-            hist_raw['Hist_Load_Pct'] = ((hist_raw['Hist_Load_kVA'] / max_mload) * 100).round(1) if max_mload > 0 else 0.0
-            hist_raw['Hist_Avg_I'] = (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P']) / 3
-            hist_raw['a_coef'] = hist_raw['A_R_P'] / hist_raw['Hist_Avg_I']
-            hist_raw['b_coef'] = hist_raw['A_S_P'] / hist_raw['Hist_Avg_I']
-            hist_raw['c_coef'] = hist_raw['A_T_P'] / hist_raw['Hist_Avg_I']
-            
-            hist_raw['Hist_Unbalance'] = np.where(
-                hist_raw['Hist_Avg_I'] > 0, 
-                (((abs(hist_raw['a_coef'] - 1) + abs(hist_raw['b_coef'] - 1) + abs(hist_raw['c_coef'] - 1)) / 3) * 100), 
-                0.0
-            ).round(2)
-            # Trend Selector
-            st.markdown("<div class='section-header'>📈 Grafik Tren Parameter Historis</div>", unsafe_allow_html=True)
-            trend_choice = st.radio(
-                "Pilih Analisis Tren:",
-                ["⚡ Beban Trafo (kVA & %)", "⚖️ Ketidakseimbangan Fasa (%)", "🔌 Profil Arus Fasa (R, S, T, N)", "⚡ Profil Tegangan (V_RN, V_SN, V_TN)", "🏥 Harmonisa (THD R, S, T)"],
-                horizontal=True
-            )
+                pel_tf['dist_m'] = np.nan
 
-            fig_trend = go.Figure()
+        # Dossier Navigation Tabs
+        tab_gis, tab_trend, tab_hist = st.tabs([
+            f"🗺️ Peta JTR & Pelanggan ({len(pel_tf)})",
+            "📈 Grafik Tren Parameter Historis",
+            "📋 Rekapitulasi Data Pengukuran"
+        ])
 
-            if trend_choice == "⚡ Beban Trafo (kVA & %)":
-                fig_trend.add_trace(go.Scatter(
-                    x=hist_raw['Timestamp_Str'], y=hist_raw['Hist_Load_Pct'],
-                    mode='lines+markers+text', name='Beban (%)',
-                    line=dict(color='#0072BC', width=3), text=hist_raw['Hist_Load_Pct'].apply(lambda x: f"{x}%"),
-                    textposition='top center'
-                ))
-                fig_trend.add_hline(y=80, line_dash="dash", line_color="#DC2626", annotation_text="Batas Beban Aman (80%)")
-                fig_trend.update_layout(yaxis_title="Persentase Pembebanan (%)")
-
-            elif trend_choice == "⚖️ Ketidakseimbangan Fasa (%)":
-                fig_trend.add_trace(go.Scatter(
-                    x=hist_raw['Timestamp_Str'], y=hist_raw['Hist_Unbalance'],
-                    mode='lines+markers+text', name='Unbalance (%)',
-                    line=dict(color='#F59E0B', width=3), text=hist_raw['Hist_Unbalance'].apply(lambda x: f"{x}%"),
-                    textposition='top center'
-                ))
-                fig_trend.add_hline(y=20, line_dash="dash", line_color="#DC2626", annotation_text="Batas Kritis (20%)")
-                fig_trend.update_layout(yaxis_title="Ketidakseimbangan Fasa (%)")
-
-            elif trend_choice == "🔌 Profil Arus Fasa (R, S, T, N)":
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_R_P'], name='Arus R (A)', line=dict(color='#EF4444', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_S_P'], name='Arus S (A)', line=dict(color='#F59E0B', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_T_P'], name='Arus T (A)', line=dict(color='#10B981', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_N_P'], name='Arus Netral N (A)', line=dict(color='#64748B', width=2, dash='dot')))
-                fig_trend.update_layout(yaxis_title="Arus (Ampere)")
-
-            elif trend_choice == "⚡ Profil Tegangan (V_RN, V_SN, V_TN)":
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_RN'], name='Voltase RN (V)', line=dict(color='#EF4444', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_SN'], name='Voltase SN (V)', line=dict(color='#F59E0B', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_TN'], name='Voltase TN (V)', line=dict(color='#10B981', width=2)))
-                fig_trend.add_hline(y=230, line_dash="dash", line_color="#3B82F6", annotation_text="Nominal PLN 230V")
-                fig_trend.add_hline(y=241.5, line_dash="dot", line_color="#EF4444", annotation_text="Batas Atas SPLN (+5%: 241.5V)")
-                fig_trend.add_hline(y=207.0, line_dash="dot", line_color="#EF4444", annotation_text="Batas Bawah SPLN (-10%: 207V)")
-                fig_trend.update_layout(yaxis_title="Tegangan Fasa-Netral (Volt)")
-
+        with tab_gis:
+            if pel_tf.empty:
+                st.info(f"ℹ️ Belum ada data pelanggan yang terdaftar untuk gardu {selected_code} di sheet DATA_PEL.")
             else:
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_R_P'], name='THD R (%)', line=dict(color='#EF4444', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_S_P'], name='THD S (%)', line=dict(color='#F59E0B', width=2)))
-                fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_T_P'], name='THD T (%)', line=dict(color='#10B981', width=2)))
-                fig_trend.add_hline(y=5, line_dash="dash", line_color="#DC2626", annotation_text="Batas IEEE THD 5%")
-                fig_trend.update_layout(yaxis_title="Distorsi Harmonisa THD (%)")
+                total_cust = len(pel_tf)
+                valid_coords = pel_tf['latitude'].notna().sum()
+                total_daya_kva = pel_tf['DAYA'].sum() / 1000.0
+                avg_daya_va = pel_tf['DAYA'].mean()
 
-            fig_trend.update_layout(height=360, margin=dict(l=20, r=20, t=30, b=10))
-            st.plotly_chart(fig_trend, use_container_width=True)
+                if has_coords and valid_coords > 0:
+                    max_dist = pel_tf['dist_m'].max()
+                    avg_dist = pel_tf['dist_m'].mean()
+                    ujung_count = int((pel_tf['dist_m'] > 350).sum())
+                    pangkal_count = int((pel_tf['dist_m'] <= 150).sum())
+                else:
+                    max_dist = np.nan
+                    avg_dist = np.nan
+                    ujung_count = 0
+                    pangkal_count = 0
 
-            # Historical Data Table
-            st.markdown("<div class='section-header'>📋 Rekapitulasi Data Pengukuran Historis</div>", unsafe_allow_html=True)
-            hist_display_cols = [
-                'Date', 'Time', 'Hist_Load_kVA', 'Hist_Load_Pct', 'Hist_Unbalance',
-                'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN',
-                'THD_R_P', 'THD_S_P', 'THD_T_P'
-            ]
-            hist_display_cols = [c for c in hist_display_cols if c in hist_raw.columns]
-            st.dataframe(
-                hist_raw[hist_display_cols].sort_values(by='Date', ascending=False),
-                use_container_width=True,
-                hide_index=True
-            )
+                # Top 4 GIS Metric Cards
+                col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+                with col_g1:
+                    st.markdown(f"""
+                        <div class='kpi-card kpi-card-info' style='padding: 12px 14px;'>
+                            <div class='kpi-title'>Total Pelanggan</div>
+                            <div class='kpi-value' style='font-size: 22px; color: #0072BC;'>{total_cust} <span style='font-size: 13px; color: #64748B;'>Plg</span></div>
+                            <div class='kpi-desc'>GPS Terpetakan: <b>{valid_coords}</b> ({valid_coords/total_cust*100:.0f}%)</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                with col_g2:
+                    st.markdown(f"""
+                        <div class='kpi-card kpi-card-info' style='padding: 12px 14px;'>
+                            <div class='kpi-title'>Total Daya Kontrak</div>
+                            <div class='kpi-value' style='font-size: 22px; color: #0072BC;'>{total_daya_kva:.1f} <span style='font-size: 13px; color: #64748B;'>kVA</span></div>
+                            <div class='kpi-desc'>Rata-rata: <b>{avg_daya_va:.0f} VA</b> / Plg</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                with col_g3:
+                    st.markdown(f"""
+                        <div class='kpi-card kpi-card-info' style='padding: 12px 14px;'>
+                            <div class='kpi-title'>Jangkauan JTR Terjauh</div>
+                            <div class='kpi-value' style='font-size: 22px; color: #0072BC;'>{f"{max_dist:.0f} m" if pd.notna(max_dist) else "-"}</div>
+                            <div class='kpi-desc'>Rata-rata radius: <b>{f"{avg_dist:.0f} m" if pd.notna(avg_dist) else "-"}</b></div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                with col_g4:
+                    is_ujung_alert = ujung_count > 0
+                    st.markdown(f"""
+                        <div class='kpi-card {"kpi-card-danger" if is_ujung_alert else "kpi-card-success"}' style='padding: 12px 14px;'>
+                            <div class='kpi-title'>Pelanggan Ujung (>350m)</div>
+                            <div class='kpi-value' style='font-size: 22px; color: {"#EF4444" if is_ujung_alert else "#10B981"};'>{ujung_count} <span style='font-size: 13px; color: #64748B;'>Plg</span></div>
+                            <div class='kpi-desc'>{"⚠️ Rawan Drop Tegangan" if is_ujung_alert else "🟢 Radius JTR Aman"}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+                # Interactive Map
+                if has_coords and valid_coords > 0:
+                    st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 8px 0;'>🗺️ Peta Spasial Jaringan Tegangan Rendah (JTR) & Sebaran Pelanggan</div>", unsafe_allow_html=True)
+                    st.caption("Peta interaktif sebaran pelanggan di sekitar gardu distribusi. Titik merah melambangkan lokasi gardu, dan titik berwarna menunjukkan sebaran pelanggan berdasarkan kelompok daya tersambung.")
+
+                    fig_map = go.Figure()
+                    tf_lat = static_info['latitude']
+                    tf_lon = static_info['longitude']
+
+                    # Add Transformer marker
+                    try:
+                        fig_map.add_trace(go.Scattermap(
+                            lat=[tf_lat],
+                            lon=[tf_lon],
+                            mode='markers+text',
+                            marker=dict(size=18, color='#DC2626'),
+                            text=[f"⚡ {selected_code}"],
+                            textposition='top right',
+                            textfont=dict(size=12, color='#0F172A'),
+                            name=f"⚡ Gardu {selected_code}",
+                            customdata=[[selected_code, static_info['TF_Name'], static_info['TF_MLoad'], static_info.get('Load Percentage', 0)]],
+                            hovertemplate="<b>⚡ GARDU DISTRIBUSI</b><br>" +
+                                          "Kode: %{customdata[0]}<br>" +
+                                          "Nama: %{customdata[1]}<br>" +
+                                          "Kapasitas: %{customdata[2]} kVA<br>" +
+                                          "Beban: %{customdata[3]}%<extra></extra>"
+                        ))
+                    except Exception:
+                        fig_map.add_trace(go.Scattermapbox(
+                            lat=[tf_lat],
+                            lon=[tf_lon],
+                            mode='markers+text',
+                            marker=dict(size=18, color='#DC2626'),
+                            text=[f"⚡ {selected_code}"],
+                            textposition='top right',
+                            textfont=dict(size=12, color='#0F172A'),
+                            name=f"⚡ Gardu {selected_code}",
+                            customdata=[[selected_code, static_info['TF_Name'], static_info['TF_MLoad'], static_info.get('Load Percentage', 0)]],
+                            hovertemplate="<b>⚡ GARDU DISTRIBUSI</b><br>" +
+                                          "Kode: %{customdata[0]}<br>" +
+                                          "Nama: %{customdata[1]}<br>" +
+                                          "Kapasitas: %{customdata[2]} kVA<br>" +
+                                          "Beban: %{customdata[3]}%<extra></extra>"
+                        ))
+
+                    # Group customers by power category
+                    daya_categories = [
+                        ('450 VA', lambda d: d <= 450, '#3B82F6', 7),
+                        ('900 VA', lambda d: (d > 450) & (d <= 900), '#10B981', 8),
+                        ('1300 VA', lambda d: (d > 900) & (d <= 1300), '#F59E0B', 9),
+                        ('2200 VA', lambda d: (d > 1300) & (d <= 2200), '#8B5CF6', 10),
+                        ('≥ 3500 VA', lambda d: d > 2200, '#EC4899', 12)
+                    ]
+
+                    pel_plot = pel_tf[pel_tf['latitude'].notna() & pel_tf['longitude'].notna()].copy()
+                    pel_plot['dist_str'] = pel_plot['dist_m'].apply(lambda x: f"{x:.0f} m" if pd.notna(x) else "-")
+                    pel_plot['zone_str'] = pel_plot['dist_m'].apply(
+                        lambda x: "Tiang Pangkal (≤150m)" if x <= 150 else ("Ujung JTR (>350m - Rawan Drop V)" if x > 350 else "JTR Menengah (150-350m)")
+                    )
+
+                    for label, cond, color, size in daya_categories:
+                        sub_daya = pel_plot[cond(pel_plot['DAYA'])]
+                        if not sub_daya.empty:
+                            c_data = np.stack((
+                                sub_daya['IDPEL'].astype(str),
+                                sub_daya['DAYA'].astype(str),
+                                sub_daya['dist_str'],
+                                sub_daya['zone_str']
+                            ), axis=-1)
+
+                            try:
+                                fig_map.add_trace(go.Scattermap(
+                                    lat=sub_daya['latitude'],
+                                    lon=sub_daya['longitude'],
+                                    mode='markers',
+                                    marker=dict(size=size, color=color, opacity=0.85),
+                                    name=f"{label} ({len(sub_daya)})",
+                                    customdata=c_data,
+                                    hovertemplate="<b>Pelanggan:</b> %{customdata[0]}<br>" +
+                                                  "<b>Daya:</b> %{customdata[1]} VA<br>" +
+                                                  "<b>Jarak ke Trafo:</b> %{customdata[2]}<br>" +
+                                                  "<b>Zona:</b> %{customdata[3]}<extra></extra>"
+                                ))
+                            except Exception:
+                                fig_map.add_trace(go.Scattermapbox(
+                                    lat=sub_daya['latitude'],
+                                    lon=sub_daya['longitude'],
+                                    mode='markers',
+                                    marker=dict(size=size, color=color, opacity=0.85),
+                                    name=f"{label} ({len(sub_daya)})",
+                                    customdata=c_data,
+                                    hovertemplate="<b>Pelanggan:</b> %{customdata[0]}<br>" +
+                                                  "<b>Daya:</b> %{customdata[1]} VA<br>" +
+                                                  "<b>Jarak ke Trafo:</b> %{customdata[2]}<br>" +
+                                                  "<b>Zona:</b> %{customdata[3]}<extra></extra>"
+                                ))
+
+                    try:
+                        fig_map.update_layout(
+                            map=dict(style="open-street-map", center=dict(lat=tf_lat, lon=tf_lon), zoom=15),
+                            margin=dict(l=0, r=0, t=0, b=0),
+                            height=520,
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, bgcolor="rgba(255, 255, 255, 0.85)", bordercolor="#E2E8F0", borderwidth=1)
+                        )
+                    except Exception:
+                        fig_map.update_layout(
+                            mapbox=dict(style="open-street-map", center=dict(lat=tf_lat, lon=tf_lon), zoom=15),
+                            margin=dict(l=0, r=0, t=0, b=0),
+                            height=520,
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, bgcolor="rgba(255, 255, 255, 0.85)", bordercolor="#E2E8F0", borderwidth=1)
+                        )
+
+                    st.plotly_chart(fig_map, use_container_width=True)
+
+                elif not has_coords:
+                    st.warning("⚠️ Koordinat GPS untuk gardu ini belum terisi di sheet INFO_DATA sehingga peta spasial belum dapat dihitung jaraknya.")
+
+                # Table of Farthest Customers (Pelanggan Ujung JTR)
+                if has_coords and ujung_count > 0:
+                    st.markdown("""
+                        <div style='background: #FFFBEB; border: 1.5px solid #F59E0B; border-radius: 10px; padding: 14px 18px; margin: 16px 0 12px 0;'>
+                            <div style='font-size: 14px; font-weight: 800; color: #B45309; display: flex; align-items: center; gap: 8px;'>
+                                ⚠️ IDENTIFIKASI PELANGGAN UJUNG JTR (>350 Meter) - RISIKO DROP TEGANGAN
+                            </div>
+                            <div style='font-size: 12.5px; color: #78350F; margin-top: 6px; line-height: 1.5;'>
+                                Berdasarkan standar <b>SPLN D3.002-1:2007</b>, toleransi tegangan pelayanan pada titik sambungan konsumen adalah <b>+5% / -10% (207V - 241.5V)</b>.
+                                Pelanggan di bawah ini berjarak <b>>350 meter</b> dari trafo dan paling berisiko mengalami penurunan tegangan pelayanan di bawah 207V saat jam beban puncak.
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    farthest_df = pel_tf[pel_tf['dist_m'] > 350].sort_values(by='dist_m', ascending=False).head(15).copy()
+                    farthest_disp = pd.DataFrame({
+                        'IDPEL': farthest_df['IDPEL'].astype(str),
+                        'Daya (VA)': farthest_df['DAYA'].astype(int),
+                        'Jarak ke Trafo (m)': farthest_df['dist_m'].round(0).astype(int),
+                        'Status Risiko': '⚠️ Rawan Drop Tegangan (<207V)',
+                        'Latitude': farthest_df['latitude'].round(6),
+                        'Longitude': farthest_df['longitude'].round(6)
+                    })
+                    st.dataframe(farthest_disp, use_container_width=True, hide_index=True)
+
+                # Searchable Customer Master Table & CSV Export
+                st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 20px 0 8px 0;'>📋 Daftar Seluruh Pelanggan Tersambung</div>", unsafe_allow_html=True)
+                
+                c_search, c_filter_daya = st.columns([2, 1])
+                with c_search:
+                    pel_search = st.text_input("Cari IDPEL:", placeholder="Ketik nomor IDPEL...", key="pel_search_input")
+                with c_filter_daya:
+                    daya_list = ["Semua Daya"] + sorted([int(d) for d in pel_tf['DAYA'].unique() if d > 0])
+                    sel_daya = st.selectbox("Filter Daya (VA):", daya_list, key="pel_daya_filter")
+
+                pel_table_df = pel_tf.copy()
+                if pel_search:
+                    pel_table_df = pel_table_df[pel_table_df['IDPEL'].astype(str).str.contains(pel_search.strip(), case=False, na=False)]
+                if sel_daya != "Semua Daya":
+                    pel_table_df = pel_table_df[pel_table_df['DAYA'] == sel_daya]
+
+                if 'dist_m' in pel_table_df.columns:
+                    pel_table_df['dist_sort'] = pel_table_df['dist_m'].fillna(999999)
+                    pel_table_df = pel_table_df.sort_values(by='dist_sort', ascending=True)
+
+                table_disp = pd.DataFrame({
+                    'IDPEL': pel_table_df['IDPEL'].astype(str),
+                    'Daya (VA)': pel_table_df['DAYA'].astype(int),
+                    'Jarak ke Trafo': pel_table_df['dist_m'].apply(lambda x: f"{x:.0f} m" if pd.notna(x) else "-") if 'dist_m' in pel_table_df.columns else "-",
+                    'Zona JTR': pel_table_df['dist_m'].apply(lambda x: "Pangkal (≤150m)" if x <= 150 else ("Ujung (>350m)" if x > 350 else "Menengah")) if 'dist_m' in pel_table_df.columns else "-",
+                    'Latitude': pel_table_df['latitude'].apply(lambda x: f"{x:.6f}" if pd.notna(x) else "-"),
+                    'Longitude': pel_table_df['longitude'].apply(lambda x: f"{x:.6f}" if pd.notna(x) else "-")
+                })
+
+                st.dataframe(table_disp, use_container_width=True, hide_index=True)
+
+                csv_pel = table_disp.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label=f"📥 Unduh Daftar Pelanggan {selected_code} (CSV)",
+                    data=csv_pel,
+                    file_name=f"Pelanggan_{selected_code}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+
+        with tab_trend:
+            if hist_raw.empty:
+                st.warning("⚠️ Gardu ini belum memiliki catatan riwayat pengukuran di sheet RAW_MEA.")
+            else:
+                # Process history data
+                hist_raw['Parsed_Time'] = pd.to_datetime(
+                    hist_raw['Date'].astype(str) + ' ' + hist_raw['Time'].astype(str),
+                    errors='coerce'
+                )
+                hist_raw = hist_raw.sort_values(by='Parsed_Time', ascending=True)
+                hist_raw['Timestamp_Str'] = hist_raw['Date'].astype(str) + ' ' + hist_raw['Time'].astype(str)
+
+                for c in ['A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN', 'THD_R_P', 'THD_S_P', 'THD_T_P']:
+                    if c in hist_raw.columns:
+                        hist_raw[c] = pd.to_numeric(hist_raw[c], errors='coerce').fillna(0)
+
+                # Standar Listrik PLN: Tegangan Nominal 230V
+                if int(static_info.get('TF_Phase', 3) or 3) == 1:
+                    hist_raw['Hist_Load_kVA'] = ((230.0 * hist_raw['A_R_P']) / 1000.0).round(2)
+                else:
+                    hist_raw['Hist_Load_kVA'] = ((230.0 * (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P'])) / 1000.0).round(2)
+                max_mload = float(static_info['TF_MLoad'] or 50.0)
+                hist_raw['Hist_Load_Pct'] = ((hist_raw['Hist_Load_kVA'] / max_mload) * 100).round(1) if max_mload > 0 else 0.0
+                hist_raw['Hist_Avg_I'] = (hist_raw['A_R_P'] + hist_raw['A_S_P'] + hist_raw['A_T_P']) / 3
+                hist_raw['a_coef'] = hist_raw['A_R_P'] / hist_raw['Hist_Avg_I']
+                hist_raw['b_coef'] = hist_raw['A_S_P'] / hist_raw['Hist_Avg_I']
+                hist_raw['c_coef'] = hist_raw['A_T_P'] / hist_raw['Hist_Avg_I']
+                
+                hist_raw['Hist_Unbalance'] = np.where(
+                    hist_raw['Hist_Avg_I'] > 0, 
+                    (((abs(hist_raw['a_coef'] - 1) + abs(hist_raw['b_coef'] - 1) + abs(hist_raw['c_coef'] - 1)) / 3) * 100), 
+                    0.0
+                ).round(2)
+                # Trend Selector
+                st.markdown("<div class='section-header'>📈 Grafik Tren Parameter Historis</div>", unsafe_allow_html=True)
+                trend_choice = st.radio(
+                    "Pilih Analisis Tren:",
+                    ["⚡ Beban Trafo (kVA & %)", "⚖️ Ketidakseimbangan Fasa (%)", "🔌 Profil Arus Fasa (R, S, T, N)", "⚡ Profil Tegangan (V_RN, V_SN, V_TN)", "🏥 Harmonisa (THD R, S, T)"],
+                    horizontal=True
+                )
+
+                fig_trend = go.Figure()
+
+                if trend_choice == "⚡ Beban Trafo (kVA & %)":
+                    fig_trend.add_trace(go.Scatter(
+                        x=hist_raw['Timestamp_Str'], y=hist_raw['Hist_Load_Pct'],
+                        mode='lines+markers+text', name='Beban (%)',
+                        line=dict(color='#0072BC', width=3), text=hist_raw['Hist_Load_Pct'].apply(lambda x: f"{x}%"),
+                        textposition='top center'
+                    ))
+                    fig_trend.add_hline(y=80, line_dash="dash", line_color="#DC2626", annotation_text="Batas Beban Aman (80%)")
+                    fig_trend.update_layout(yaxis_title="Persentase Pembebanan (%)")
+
+                elif trend_choice == "⚖️ Ketidakseimbangan Fasa (%)":
+                    fig_trend.add_trace(go.Scatter(
+                        x=hist_raw['Timestamp_Str'], y=hist_raw['Hist_Unbalance'],
+                        mode='lines+markers+text', name='Unbalance (%)',
+                        line=dict(color='#F59E0B', width=3), text=hist_raw['Hist_Unbalance'].apply(lambda x: f"{x}%"),
+                        textposition='top center'
+                    ))
+                    fig_trend.add_hline(y=20, line_dash="dash", line_color="#DC2626", annotation_text="Batas Kritis (20%)")
+                    fig_trend.update_layout(yaxis_title="Ketidakseimbangan Fasa (%)")
+
+                elif trend_choice == "🔌 Profil Arus Fasa (R, S, T, N)":
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_R_P'], name='Arus R (A)', line=dict(color='#EF4444', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_S_P'], name='Arus S (A)', line=dict(color='#F59E0B', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_T_P'], name='Arus T (A)', line=dict(color='#10B981', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['A_N_P'], name='Arus Netral N (A)', line=dict(color='#64748B', width=2, dash='dot')))
+                    fig_trend.update_layout(yaxis_title="Arus (Ampere)")
+
+                elif trend_choice == "⚡ Profil Tegangan (V_RN, V_SN, V_TN)":
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_RN'], name='Voltase RN (V)', line=dict(color='#EF4444', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_SN'], name='Voltase SN (V)', line=dict(color='#F59E0B', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['V_TN'], name='Voltase TN (V)', line=dict(color='#10B981', width=2)))
+                    fig_trend.add_hline(y=230, line_dash="dash", line_color="#3B82F6", annotation_text="Nominal PLN 230V")
+                    fig_trend.add_hline(y=241.5, line_dash="dot", line_color="#EF4444", annotation_text="Batas Atas SPLN (+5%: 241.5V)")
+                    fig_trend.add_hline(y=207.0, line_dash="dot", line_color="#EF4444", annotation_text="Batas Bawah SPLN (-10%: 207V)")
+                    fig_trend.update_layout(yaxis_title="Tegangan Fasa-Netral (Volt)")
+
+                else:
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_R_P'], name='THD R (%)', line=dict(color='#EF4444', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_S_P'], name='THD S (%)', line=dict(color='#F59E0B', width=2)))
+                    fig_trend.add_trace(go.Scatter(x=hist_raw['Timestamp_Str'], y=hist_raw['THD_T_P'], name='THD T (%)', line=dict(color='#10B981', width=2)))
+                    fig_trend.add_hline(y=5, line_dash="dash", line_color="#DC2626", annotation_text="Batas IEEE THD 5%")
+                    fig_trend.update_layout(yaxis_title="Distorsi Harmonisa THD (%)")
+
+                fig_trend.update_layout(height=360, margin=dict(l=20, r=20, t=30, b=10))
+                st.plotly_chart(fig_trend, use_container_width=True)
+
+        with tab_hist:
+            if hist_raw.empty:
+                st.warning("⚠️ Gardu ini belum memiliki catatan riwayat pengukuran di sheet RAW_MEA.")
+            else:
+                # Historical Data Table
+                st.markdown("<div class='section-header'>📋 Rekapitulasi Data Pengukuran Historis</div>", unsafe_allow_html=True)
+                hist_display_cols = [
+                    'Date', 'Time', 'Hist_Load_kVA', 'Hist_Load_Pct', 'Hist_Unbalance',
+                    'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN',
+                    'THD_R_P', 'THD_S_P', 'THD_T_P'
+                ]
+                hist_display_cols = [c for c in hist_display_cols if c in hist_raw.columns]
+                st.dataframe(
+                    hist_raw[hist_display_cols].sort_values(by='Date', ascending=False),
+                    use_container_width=True,
+                    hide_index=True
+                )
 
 
 # ==========================================
@@ -2365,9 +2717,11 @@ elif menu_selection == "📋 Data Semua Trafo":
 
     # Filter Summary Bar
     st.markdown(f"""
-        <div style='background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px; margin-bottom:14px; font-size:13px; display:flex; gap:20px;'>
+        <div style='background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px; margin-bottom:14px; font-size:13px; display:flex; flex-wrap:wrap; gap:20px;'>
             <span>Ditemukan: <b>{len(filtered_df)}</b> Gardu</span>
-            <span>Total Kapasitas Terpasang: <b>{filtered_df['TF_MLoad'].sum():,.0f} kVA</b></span>
+            <span>Total Kapasitas: <b>{filtered_df['TF_MLoad'].sum():,.0f} kVA</b></span>
+            <span>Total Pelanggan: <b>{filtered_df['Total_Pelanggan'].sum():,.0f} Plg</b></span>
+            <span>Daya Kontrak: <b>{filtered_df['Total_Daya_kVA'].sum():,.1f} kVA</b></span>
             <span>Gardu Terukur: <b>{filtered_df['Is_Measured'].sum()}</b></span>
             <span>Gardu Overload: <b>{(filtered_df['Load Percentage'] > 80).sum()}</b></span>
         </div>
@@ -2376,6 +2730,7 @@ elif menu_selection == "📋 Data Semua Trafo":
     # Format Columns for Display
     show_cols = [
         'TF_Code', 'TF_Name', 'TF_Unit', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+        'Total_Pelanggan', 'Total_Daya_kVA',
         'Measurement_Status', 'Load Percentage', 'Current Load', 'Unbalance (%)',
         'Health Score', 'Date', 'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'TF_Coordinate'
     ]
