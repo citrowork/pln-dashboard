@@ -1999,9 +1999,10 @@ elif menu_selection == "⚖️ Penyeimbangan Beban":
             )
             st.plotly_chart(fig_lwbp, use_container_width=True)
 
-    # 6. Actionable Field Instructions (Instruksi Lapangan)
+    # 6. Panduan Visual & Prognosa Pemindahan Beban
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-header'>🛠️ Instruksi Tindakan Lapangan (Actionable Work Orders)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>🛠️ Panduan Visual & Prognosa Pemindahan Beban Fasa</div>", unsafe_allow_html=True)
+    st.caption("Visualisasi alur mutasi fasa sambungan rumah (SR) dan tabel prognosa perbandingan sebelum vs sesudah penyeimbangan.")
 
     # Inspect Jurusan distribution from selected measurement record
     jur_data = []
@@ -2021,44 +2022,142 @@ elif menu_selection == "⚖️ Penyeimbangan Beban":
     if sol['status'] == 'balanced' or len(sol['shifts']) == 0:
         st.success(f"✅ **Beban Gardu {selected_tf_code} Sudah Seimbang!** Ketidakseimbangan saat ini ({sol['unb_w_pre']:.1f}%) telah berada di bawah batas standar PLN Buku 3 (< 10%). Tidak diperlukan mutasi fasa.")
     else:
-        st.info("ℹ️ **Rencana Eksekusi Mutasi Beban Sambungan Rumah (SR) di Lapangan:**")
-        
-        # Jurusan Guidance if available
-        if jur_data:
-            jur_sorted = sorted(jur_data, key=lambda x: x['unb'], reverse=True)
-            worst_j = jur_sorted[0]
-            st.markdown(f"""
-                <div style='background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; font-size: 13px; color: #92400E;'>
-                    <b>🔍 Analisis Sumber Ketidakseimbangan Terbesar:</b><br>
-                    Ketidakseimbangan fasa dominan bersumber dari <b>{worst_j['jurusan']}</b> dengan ketidakseimbangan <b>{worst_j['unb']:.1f}%</b> (R={worst_j['R']}A, S={worst_j['S']}A, T={worst_j['T']}A).
-                    Prioritaskan mutasi sambungan rumah (SR) pada tiang-tiang di sepanjang jalur <b>{worst_j['jurusan']}</b>.
-                </div>
-            """, unsafe_allow_html=True)
+        # A. Visual Phase Transfer Flowcards (Kartu Grafis Alur Pemindahan)
+        st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 12px 0 8px 0;'>1. Peta Alur Pemindahan Beban Antar Fasa</div>", unsafe_allow_html=True)
 
-        # Loop through shifts and generate clear human instructions
+        phase_meta = {
+            'R': {'name': 'Fasa R', 'color': '#EF4444', 'border': '#FCA5A5', 'bg': '#FEF2F2', 'icon': '🔴'},
+            'S': {'name': 'Fasa S', 'color': '#D97706', 'border': '#FCD34D', 'bg': '#FFFBEB', 'icon': '🟡'},
+            'T': {'name': 'Fasa T', 'color': '#2563EB', 'border': '#93C5FD', 'bg': '#EFF6FF', 'icon': '🔵'}
+        }
+
         for idx, (p_from, p_to, d_w, d_l) in enumerate(sol['shifts'], start=1):
-            # Customer equivalents
             n_900 = max(1, round(d_w / 3.9))
             n_1300 = max(1, round(d_w / 5.7))
-            n_450 = max(1, round(d_w / 2.0))
+            meta_from = phase_meta.get(p_from, {'name': f'Fasa {p_from}', 'color': '#EF4444', 'border': '#E2E8F0', 'bg': '#FFFFFF', 'icon': '⚡'})
+            meta_to = phase_meta.get(p_to, {'name': f'Fasa {p_to}', 'color': '#10B981', 'border': '#E2E8F0', 'bg': '#FFFFFF', 'icon': '⚡'})
 
-            day_text = f" (dan ~{d_l:.1f} A pada siang LWBP)" if has_dual and d_l > 0 else ""
+            pre_from = wbp_dict.get(p_from, 0.0)
+            post_from = sol['w_post'].get(p_from, 0.0)
+            pre_to = wbp_dict.get(p_to, 0.0)
+            post_to = sol['w_post'].get(p_to, 0.0)
+
+            day_text_badge = f"<div style='font-size: 11px; color: #059669; font-weight: 600; margin-top: 3px;'>☀️ Siang LWBP: ~{d_l:.1f} A</div>" if has_dual and d_l > 0 else ""
 
             st.markdown(f"""
-                <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-left: 5px solid #0072BC; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);'>
-                    <div style='font-size: 15px; font-weight: 800; color: #0F172A;'>
-                        📌 Langkah {idx}: Pindahkan Beban dari <span style='color: #EF4444;'>Fasa {p_from}</span> ➔ ke <span style='color: #10B981;'>Fasa {p_to}</span>
+                <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.04);'>
+                    <div style='font-size: 12px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;'>
+                        TINDAKAN MUTASI #{idx}
                     </div>
-                    <div style='font-size: 13px; color: #334155; margin-top: 6px;'>
-                        • <b>Besaran Arus yang Dipindahkan:</b> <b>~{d_w:.1f} Ampere</b> pada waktu beban puncak malam{day_text}.<br>
-                        • <b>Estimasi Jumlah Pelanggan yang Dimutasi:</b><br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_900} Pelanggan</b> Daya 900 VA (R1 / 4A), <i>atau</i><br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_1300} Pelanggan</b> Daya 1.300 VA (R1 / 6A), <i>atau</i><br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;▹ Setara <b>~{n_450} Pelanggan</b> Daya 450 VA (R1 / 2A).<br>
-                        • <b>Rekomendasi Penempatan:</b> Pindahkan sambungan rumah (*tapping* SR) pada tiang awal hingga tengah saluran JTR guna menjaga drop tegangan ujung tetap optimal.
+                    <div style='display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center;'>
+                        <!-- DONOR CARD -->
+                        <div style='background: {meta_from["bg"]}; border: 1.5px solid {meta_from["border"]}; border-radius: 10px; padding: 12px 14px;'>
+                            <div style='font-size: 14px; font-weight: 800; color: {meta_from["color"]}; display: flex; align-items: center; gap: 6px;'>
+                                <span>{meta_from["icon"]}</span> {meta_from["name"]} (DONOR BEBAN)
+                            </div>
+                            <div style='margin-top: 6px; font-size: 12px; color: #475569;'>
+                                Arus Awal: <b style='color: #0F172A;'>{pre_from:.1f} A</b> <span style='color: #EF4444; font-size: 11px;'>(Kelebihan)</span>
+                            </div>
+                            <div style='font-size: 12px; color: #475569; margin-top: 2px;'>
+                                Tindakan: <b style='color: #EF4444;'>🔻 Kurangi {d_w:.1f} A</b>
+                            </div>
+                            <div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_from["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
+                                Prognosa Akhir: {post_from:.1f} A ✅
+                            </div>
+                        </div>
+
+                        <!-- TRANSFER ARROW -->
+                        <div style='text-align: center; padding: 0 8px;'>
+                            <div style='font-size: 24px; color: #0072BC; font-weight: 800;'>➔</div>
+                            <div style='background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 10px; margin-top: 4px;'>
+                                <div style='font-size: 13px; font-weight: 800; color: #0072BC;'>🚚 Geser ~{d_w:.1f} A</div>
+                                <div style='font-size: 11px; color: #475569; font-weight: 600;'>~{n_900} Rumah (900VA)</div>
+                                {day_text_badge}
+                            </div>
+                        </div>
+
+                        <!-- RECEIVER CARD -->
+                        <div style='background: {meta_to["bg"]}; border: 1.5px solid {meta_to["border"]}; border-radius: 10px; padding: 12px 14px;'>
+                            <div style='font-size: 14px; font-weight: 800; color: {meta_to["color"]}; display: flex; align-items: center; gap: 6px;'>
+                                <span>{meta_to["icon"]}</span> {meta_to["name"]} (PENERIMA BEBAN)
+                            </div>
+                            <div style='margin-top: 6px; font-size: 12px; color: #475569;'>
+                                Arus Awal: <b style='color: #0F172A;'>{pre_to:.1f} A</b> <span style='color: #D97706; font-size: 11px;'>(Kekurangan)</span>
+                            </div>
+                            <div style='font-size: 12px; color: #475569; margin-top: 2px;'>
+                                Tindakan: <b style='color: #15803D;'>🔺 Tambah {d_w:.1f} A</b>
+                            </div>
+                            <div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_to["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
+                                Prognosa Akhir: {post_to:.1f} A ✅
+                            </div>
+                        </div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
+
+        # B. Tabel Matriks Prognosa Fasa Lengkap (Sebelum vs Sesudah)
+        st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 20px 0 8px 0;'>2. Tabel Matriks Prognosa Kondisi Fasa (Sebelum vs Sesudah)</div>", unsafe_allow_html=True)
+
+        matrix_rows = []
+        for p in ['R', 'S', 'T']:
+            pre_v = wbp_dict.get(p, 0.0)
+            post_v = sol['w_post'].get(p, 0.0)
+            diff = post_v - pre_v
+            
+            icon = phase_meta[p]['icon']
+            p_name = f"{icon} Fasa {p}"
+            
+            if diff < -0.1:
+                aksi = f"🔻 Lepas ~{abs(diff):.1f} A (ke fasa lain)"
+                st_awal = "🔴 Kelebihan Beban"
+            elif diff > 0.1:
+                aksi = f"🔺 Terima ~{abs(diff):.1f} A (dari fasa donor)"
+                st_awal = "🟡 Kurang Beban"
+            else:
+                aksi = "Pertahankan (Tetap)"
+                st_awal = "🟢 Seimbang"
+                
+            matrix_rows.append({
+                "Fasa Konduktor": p_name,
+                "Arus Awal (Eksisting)": f"{pre_v:.1f} A",
+                "Kondisi Awal": st_awal,
+                "Aksi Mutasi Sambungan (SR)": aksi,
+                "Arus Target (Prognosa)": f"{post_v:.1f} A",
+                "Kondisi Akhir": "🟢 Ideal & Seimbang"
+            })
+
+        # Neutral row
+        in_diff = sol['in_w_post'] - in_w_old
+        matrix_rows.append({
+            "Fasa Konduktor": "⚪ Kawat Netral (N)",
+            "Arus Awal (Eksisting)": f"{in_w_old:.1f} A",
+            "Kondisi Awal": "⚠️ Arus Tinggi (Panas/Losses)" if in_w_old > 10 else "Normal",
+            "Aksi Mutasi Sambungan (SR)": f"📉 Reduksi Arus {abs(in_diff):.1f} A (-{abs(in_diff)/in_w_old*100:.0f}%)" if in_w_old > 0.1 else "-",
+            "Arus Target (Prognosa)": f"{sol['in_w_post']:.1f} A",
+            "Kondisi Akhir": "🟢 Dingin & Aman"
+        })
+
+        df_matrix = pd.DataFrame(matrix_rows)
+        st.dataframe(df_matrix, use_container_width=True, hide_index=True)
+
+        if has_dual:
+            st.caption(f"☀️ **Verifikasi Keamanan Siang Hari (LWBP):** Pada siang hari, arus fasa diproyeksikan menjadi R={sol['l_post']['R']:.1f} A, S={sol['l_post']['S']:.1f} A, T={sol['l_post']['T']:.1f} A. Seluruh fasa tetap aman di bawah kapasitas nominal trafo ({tf_nominal_amp} A).")
+
+        # C. Checklist Panduan Tiang Lapangan yang Konkret
+        st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 20px 0 8px 0;'>3. Checklist Petunjuk Kerja Tim Lapangan</div>", unsafe_allow_html=True)
+
+        jur_sorted = sorted(jur_data, key=lambda x: x['unb'], reverse=True) if jur_data else []
+        worst_jur_text = f"Fokus utama pada <b>{jur_sorted[0]['jurusan']}</b> (penyumbang ketidakseimbangan terbesar: {jur_sorted[0]['unb']:.1f}%)." if jur_sorted else "Lakukan pada percabangan utama JTR gardu."
+
+        st.markdown(f"""
+            <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 18px;'>
+                <div style='font-size: 13px; color: #334155; line-height: 1.6;'>
+                    <b>✅ Langkah 1 (Lokasi Jurusan):</b> {worst_jur_text}<br>
+                    <b>✅ Langkah 2 (Pemilihan Tiang):</b> Prioritaskan tiang awal (tiang 1 sampai 4 dari gardu distribusi) tempat tarikan arus pelanggan paling besar untuk penurunan losses yang maksimal.<br>
+                    <b>✅ Langkah 3 (Pelaksanaan Mutasi):</b> Identifikasi kabel SR pelanggan 1-fasa yang terpasang di fasa donor. Buka klem konektor (<i>piercing connector / tap</i>) pada fasa donor, lalu pasangkan ke fasa penerima secara bertahap sambil memonitor tang ampere.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
 
     # 7. Interactive "What-If" Simulator
     st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
