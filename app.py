@@ -2143,58 +2143,7 @@ elif menu_selection == "⚖️ Penyeimbangan Beban":
                 </div>
             """, unsafe_allow_html=True)
 
-    # 8. SPK / Field Execution Work Order Export
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-    with st.expander("📄 Cetak / Salin Lembar Kerja Perintah Eksekusi (SPK Lapangan)", expanded=False):
-        spk_text = f"""================================================================================
-PT PLN (PERSERO) UP3 SAUMLAKI - ULP MOA
-LEMBAR REKOMENDASI & PERINTAH KERJA PENYEIMBANGAN BEBAN TRAFO
-================================================================================
-Tanggal Analisis : {datetime.now().strftime('%d/%m/%Y %H:%M WIT')}
-Kode Gardu       : {selected_tf_code}
-Nama Gardu       : {tf_name}
-Kapasitas Trafo  : {tf_mload} kVA (Arus Nominal: {tf_nominal_amp} A)
-Status Profil    : {'PROFIL GANDA (WBP & LWBP)' if has_dual else 'PROFIL TUNGGAL (WBP)'}
 
-A. KONDISI EKSISTING SEBELUM PENYEIMBANGAN:
-   - WBP (Malam)  : R={w_ir:.1f} A | S={w_is:.1f} A | T={w_it:.1f} A | N={in_w_old:.1f} A
-   - Ketidakseimbangan WBP : {sol['unb_w_pre']:.2f}% (Status: {'KRITIS' if sol['unb_w_pre']>20 else 'PERHATIAN'})
-"""
-        if has_dual:
-            spk_text += f"""   - LWBP (Siang) : R={l_ir:.1f} A | S={l_is:.1f} A | T={l_it:.1f} A | N={sol['in_l_pre']:.1f} A
-   - Ketidakseimbangan LWBP: {sol['unb_l_pre']:.2f}%
-"""
-        spk_text += f"""
-B. TARGET KONDISI SESUDAH PENYEIMBANGAN:
-   - WBP (Malam)  : R={sol['w_post']['R']:.1f} A | S={sol['w_post']['S']:.1f} A | T={sol['w_post']['T']:.1f} A | N={sol['in_w_post']:.1f} A
-   - Ketidakseimbangan WBP : {sol['unb_w_post']:.2f}% (NORMAL SEIMBANG < 10%)
-   - Estimasi Penghematan Losses : {kwh_month:.1f} kWh/bulan (Rp {rp_month:,.0f}/bulan)
-
-C. DAFTAR TINDAKAN MUTASI BEBAN SAMBUNGAN RUMAH (SR):
-"""
-        if sol['shifts']:
-            for idx, (pf, pt, dw, dl) in enumerate(sol['shifts'], start=1):
-                n900 = max(1, round(dw / 3.9))
-                spk_text += f"   {idx}. Pindahkan beban sebesar ~{dw:.1f} A dari FASA {pf} ke FASA {pt}.\n"
-                spk_text += f"      -> Setara ~{n900} pelanggan daya 900 VA (R1/4A) pada tiang awal/tengah JTR.\n"
-        else:
-            spk_text += "   - Beban sudah seimbang (<10%). Tidak ada tindakan mutasi yang diperlukan.\n"
-
-        spk_text += """
-D. TANDA TANGAN & PENGESAHAN:
-   Dibuat Oleh (Spv/Engineer Har),            Dilaksanakan Oleh (Tim Pelayanan Teknik),
-
-
-   (___________________________________)      (___________________________________)
-================================================================================
-"""
-        st.text_area("Format Siap Cetak / Salin:", value=spk_text, height=300)
-        st.download_button(
-            label="📥 Unduh Lembar Kerja (SPK.txt)",
-            data=spk_text,
-            file_name=f"SPK_Penyeimbangan_{selected_tf_code}.txt",
-            mime="text/plain"
-        )
 
 
 # ==========================================
