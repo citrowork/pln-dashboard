@@ -780,7 +780,7 @@ with st.sidebar:
         options=[
             "📊 Dashboard Utama",
             "🔌 Simulasi Yanbung",
-            "⚖️ Rekomendasi Penyeimbangan Beban",
+            "⚖️ Penyeimbangan Beban",
             "📥 Input Pengukuran Gardu",
             "📈 Riwayat & Dossier Trafo",
             "📋 Data Semua Trafo",
@@ -1644,9 +1644,9 @@ elif menu_selection == "🔌 Simulasi Yanbung":
 
 
 # ==========================================
-# PAGE: REKOMENDASI PENYEIMBANGAN BEBAN (PLN BUKU 3 - WBP & LWBP)
+# PAGE: PENYEIMBANGAN BEBAN (PLN BUKU 3 - WBP & LWBP)
 # ==========================================
-elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
+elif menu_selection == "⚖️ Penyeimbangan Beban":
 
     st.markdown("""
         <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin-bottom: 20px;'>
@@ -1654,10 +1654,10 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
                 <span style='font-size: 26px;'>⚖️</span>
                 <div>
                     <h2 style='margin: 0; font-size: 22px; color: #0F172A; font-weight: 800;'>
-                        Rekomendasi Penyeimbangan Beban Trafo Distribusi
+                        Penyeimbangan Beban Trafo Distribusi
                     </h2>
                     <div style='font-size: 13px; color: #64748B;'>
-                        Engine Rekomendasi Mutasi Fasa Beban Berbasis Standar PLN Buku 3 • Integrasi Profil Ganda (WBP Malam & LWBP Siang)
+                        Prioritas Tindakan Berdasarkan Keuntungan Finansial & Pengurangan Rugi-Rugi Teknis (Standar PLN Buku 3 • Profil WBP & LWBP)
                     </div>
                 </div>
             </div>
@@ -1681,6 +1681,25 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
         tf_with_daytime = set(day_rows['TF_Code'].astype(str).str.strip().unique())
 
     df3_all['Has_Dual_Profile'] = df3_all['TF_Code'].astype(str).str.strip().isin(tf_with_daytime)
+
+    # Calculate financial and technical benefit (Keuntungan jika diseimbangkan: I_N -> 0)
+    def eval_tf_benefit(row):
+        in_val = float(row.get('A_N_P', 0) or 0)
+        ir = float(row.get('A_R_P', 0) or 0)
+        is_ = float(row.get('A_S_P', 0) or 0)
+        it = float(row.get('A_T_P', 0) or 0)
+        if in_val <= 0.1:
+            in_val = calc_neutral_current_approx(ir, is_, it)
+        unb = float(row.get('Unbalance (%)', 0) or 0)
+        if unb < 10.0:
+            return 0.0, 0.0
+        _, _, p_saved, kwh_month, rp_month = calc_losses_and_savings(in_val, 0.0)
+        return round(kwh_month, 1), round(rp_month, 0)
+
+    benefit_res = df3_all.apply(eval_tf_benefit, axis=1)
+    df3_all['Potensi_Hemat_kWh'] = [b[0] for b in benefit_res]
+    df3_all['Potensi_Hemat_Rp'] = [b[1] for b in benefit_res]
+    total_rp_potential = int(df3_all['Potensi_Hemat_Rp'].sum())
 
     # System-level summary metrics
     kritis_count = len(df3_all[df3_all['Unbalance (%)'] > 20])
@@ -1721,16 +1740,17 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
     with col_kpi4:
         st.markdown(f"""
             <div class='kpi-card kpi-card-success'>
-                <div class='kpi-title'>Potensi Reduksi Arus Netral</div>
-                <div class='kpi-value' style='color: #10B981;'>{total_in_kritis} <span style='font-size: 14px; color: #64748B;'>A</span></div>
-                <div class='kpi-desc'>Total Arus Netral Trafo Tak Seimbang</div>
+                <div class='kpi-title'>Total Potensi Keuntungan</div>
+                <div class='kpi-value' style='color: #10B981; font-size: 24px;'>Rp {total_rp_potential:,.0f}</div>
+                <div class='kpi-desc'>Hemat losses bulanan ({total_in_kritis} A Netral)</div>
             </div>
-        """, unsafe_allow_html=True)
+        """.replace(",", "."), unsafe_allow_html=True)
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    # 2. Priority Ranking & Selection
-    st.markdown("<div class='section-header'>📋 Antrean Prioritas Penyeimbangan Beban Trafo</div>", unsafe_allow_html=True)
+    # 2. Priority Ranking by Highest Benefit / Gain
+    st.markdown("<div class='section-header'>💰 Peringkat Prioritas Berdasarkan Keuntungan Penyeimbangan Tertinggi</div>", unsafe_allow_html=True)
+    st.caption("Daftar diurutkan berdasarkan potensi keuntungan tertinggi (penghematan biaya losses konduktor netral terbesar) jika gardu tersebut diseimbangkan.")
 
     col_filter_rad, col_filter_search = st.columns([2, 1])
     with col_filter_rad:
@@ -1746,12 +1766,19 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
     elif filter_mode == "Hanya yang Memiliki Profil Ganda (WBP + LWBP)":
         filtered_df3 = filtered_df3[filtered_df3['Has_Dual_Profile']]
 
-    filtered_df3 = filtered_df3.sort_values(by='Unbalance (%)', ascending=False)
+    # SORT BY HIGHEST BENEFIT (Potensi_Hemat_Rp DESCENDING)
+    filtered_df3 = filtered_df3.sort_values(by=['Potensi_Hemat_Rp', 'Unbalance (%)'], ascending=[False, False])
 
-    # Display Priority Table
-    disp_cols = ['TF_Code', 'TF_Name', 'TF_MLoad', 'Current Load', 'Load Percentage', 'Unbalance (%)', 'A_N_P', 'Unbalance_Status', 'Has_Dual_Profile']
+    # Display Priority Table with Benefit Columns
+    disp_cols = [
+        'TF_Code', 'TF_Name', 'TF_MLoad', 'Current Load', 'Load Percentage',
+        'Unbalance (%)', 'A_N_P', 'Potensi_Hemat_Rp', 'Potensi_Hemat_kWh',
+        'Unbalance_Status', 'Has_Dual_Profile'
+    ]
     disp_df = filtered_df3[[c for c in disp_cols if c in filtered_df3.columns]].copy()
     disp_df['Has_Dual_Profile'] = disp_df['Has_Dual_Profile'].map({True: '🟢 Ganda (WBP+LWBP)', False: '🔵 Tunggal (WBP)'})
+    disp_df['Potensi_Hemat_Rp'] = disp_df['Potensi_Hemat_Rp'].apply(lambda x: f"Rp {int(x):,}/bln".replace(",", "."))
+    disp_df['Potensi_Hemat_kWh'] = disp_df['Potensi_Hemat_kWh'].apply(lambda x: f"{x:.1f} kWh")
     disp_df.rename(columns={
         'TF_Code': 'Kode Gardu',
         'TF_Name': 'Nama Gardu',
@@ -1760,6 +1787,8 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
         'Load Percentage': 'Beban (%)',
         'Unbalance (%)': 'Ketidakseimbangan (%)',
         'A_N_P': 'Arus Netral (A)',
+        'Potensi_Hemat_Rp': 'Keuntungan Hemat (Rp/bln)',
+        'Potensi_Hemat_kWh': 'Hemat Losses (kWh/bln)',
         'Unbalance_Status': 'Status PLN',
         'Has_Dual_Profile': 'Ketersediaan Profil'
     }, inplace=True)
@@ -1771,13 +1800,13 @@ elif menu_selection == "⚖️ Rekomendasi Penyeimbangan Beban":
     # 3. Transformer Deep-Dive & Profile Analysis
     st.markdown("<div class='section-header'>🔍 Analisis Mendalam & Rekomendasi Gardu</div>", unsafe_allow_html=True)
 
-    # Transformer Selectbox (default: highest unbalance)
+    # Transformer Selectbox (default: highest financial gain)
     tf_options = filtered_df3['TF_Code'].tolist()
     if not tf_options:
-        tf_options = df3_all.sort_values(by='Unbalance (%)', ascending=False)['TF_Code'].tolist()
+        tf_options = df3_all.sort_values(by=['Potensi_Hemat_Rp', 'Unbalance (%)'], ascending=[False, False])['TF_Code'].tolist()
 
     tf_labels = {
-        code: f"{code} - {df3_all.loc[df3_all['TF_Code'] == code, 'TF_Name'].values[0]} (Unb: {df3_all.loc[df3_all['TF_Code'] == code, 'Unbalance (%)'].values[0]}%)"
+        code: f"{code} - {df3_all.loc[df3_all['TF_Code'] == code, 'TF_Name'].values[0]} (Keuntungan: Rp {int(df3_all.loc[df3_all['TF_Code'] == code, 'Potensi_Hemat_Rp'].values[0]):,}/bln • Unb: {df3_all.loc[df3_all['TF_Code'] == code, 'Unbalance (%)'].values[0]:.1f}%)".replace(",", ".")
         for code in tf_options
     }
 
