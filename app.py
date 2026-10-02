@@ -2044,56 +2044,52 @@ elif menu_selection == "⚖️ Penyeimbangan Beban":
 
             day_text_badge = f"<div style='font-size: 11px; color: #059669; font-weight: 600; margin-top: 3px;'>☀️ Siang LWBP: ~{d_l:.1f} A</div>" if has_dual and d_l > 0 else ""
 
-            st.markdown(f"""
-                <div style='background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.04);'>
-                    <div style='font-size: 12px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;'>
-                        TINDAKAN MUTASI #{idx}
-                    </div>
-                    <div style='display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center;'>
-                        <!-- DONOR CARD -->
-                        <div style='background: {meta_from["bg"]}; border: 1.5px solid {meta_from["border"]}; border-radius: 10px; padding: 12px 14px;'>
-                            <div style='font-size: 14px; font-weight: 800; color: {meta_from["color"]}; display: flex; align-items: center; gap: 6px;'>
-                                <span>{meta_from["icon"]}</span> {meta_from["name"]} (DONOR BEBAN)
-                            </div>
-                            <div style='margin-top: 6px; font-size: 12px; color: #475569;'>
-                                Arus Awal: <b style='color: #0F172A;'>{pre_from:.1f} A</b> <span style='color: #EF4444; font-size: 11px;'>(Kelebihan)</span>
-                            </div>
-                            <div style='font-size: 12px; color: #475569; margin-top: 2px;'>
-                                Tindakan: <b style='color: #EF4444;'>🔻 Kurangi {d_w:.1f} A</b>
-                            </div>
-                            <div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_from["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
-                                Prognosa Akhir: {post_from:.1f} A ✅
-                            </div>
-                        </div>
+            st.markdown(f"<div style='font-size: 13px; font-weight: 800; color: #0072BC; text-transform: uppercase; margin: 12px 0 6px 0;'>⚡ TINDAKAN MUTASI #{idx}</div>", unsafe_allow_html=True)
 
-                        <!-- TRANSFER ARROW -->
-                        <div style='text-align: center; padding: 0 8px;'>
-                            <div style='font-size: 24px; color: #0072BC; font-weight: 800;'>➔</div>
-                            <div style='background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 10px; margin-top: 4px;'>
-                                <div style='font-size: 13px; font-weight: 800; color: #0072BC;'>🚚 Geser ~{d_w:.1f} A</div>
-                                <div style='font-size: 11px; color: #475569; font-weight: 600;'>~{n_900} Rumah (900VA)</div>
-                                {day_text_badge}
-                            </div>
-                        </div>
+            c_donor, c_arrow, c_recv = st.columns([5, 3, 5])
+            with c_donor:
+                st.markdown(f"""<div style='background: {meta_from["bg"]}; border: 1.5px solid {meta_from["border"]}; border-radius: 10px; padding: 12px 14px;'>
+<div style='font-size: 14px; font-weight: 800; color: {meta_from["color"]}; display: flex; align-items: center; gap: 6px;'>
+<span>{meta_from["icon"]}</span> {meta_from["name"]} (DONOR BEBAN)
+</div>
+<div style='margin-top: 6px; font-size: 12px; color: #475569;'>
+Arus Awal: <b style='color: #0F172A;'>{pre_from:.1f} A</b> <span style='color: #EF4444; font-size: 11px; font-weight: 700;'>(Kelebihan)</span>
+</div>
+<div style='font-size: 12px; color: #475569; margin-top: 2px;'>
+Tindakan: <b style='color: #EF4444;'>🔻 Kurangi {d_w:.1f} A</b>
+</div>
+<div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_from["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
+Prognosa Akhir: {post_from:.1f} A ✅
+</div>
+</div>""", unsafe_allow_html=True)
 
-                        <!-- RECEIVER CARD -->
-                        <div style='background: {meta_to["bg"]}; border: 1.5px solid {meta_to["border"]}; border-radius: 10px; padding: 12px 14px;'>
-                            <div style='font-size: 14px; font-weight: 800; color: {meta_to["color"]}; display: flex; align-items: center; gap: 6px;'>
-                                <span>{meta_to["icon"]}</span> {meta_to["name"]} (PENERIMA BEBAN)
-                            </div>
-                            <div style='margin-top: 6px; font-size: 12px; color: #475569;'>
-                                Arus Awal: <b style='color: #0F172A;'>{pre_to:.1f} A</b> <span style='color: #D97706; font-size: 11px;'>(Kekurangan)</span>
-                            </div>
-                            <div style='font-size: 12px; color: #475569; margin-top: 2px;'>
-                                Tindakan: <b style='color: #15803D;'>🔺 Tambah {d_w:.1f} A</b>
-                            </div>
-                            <div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_to["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
-                                Prognosa Akhir: {post_to:.1f} A ✅
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
+            with c_arrow:
+                st.markdown(f"""<div style='text-align: center; padding: 10px 4px;'>
+<div style='font-size: 26px; color: #0072BC; font-weight: 800; line-height: 1;'>➔</div>
+<div style='background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 8px; padding: 6px 4px; margin-top: 6px;'>
+<div style='font-size: 12px; font-weight: 800; color: #0072BC;'>🚚 Geser ~{d_w:.1f} A</div>
+<div style='font-size: 11px; color: #475569; font-weight: 600;'>~{n_900} Rumah (900VA)</div>
+{day_text_badge}
+</div>
+</div>""", unsafe_allow_html=True)
+
+            with c_recv:
+                st.markdown(f"""<div style='background: {meta_to["bg"]}; border: 1.5px solid {meta_to["border"]}; border-radius: 10px; padding: 12px 14px;'>
+<div style='font-size: 14px; font-weight: 800; color: {meta_to["color"]}; display: flex; align-items: center; gap: 6px;'>
+<span>{meta_to["icon"]}</span> {meta_to["name"]} (PENERIMA BEBAN)
+</div>
+<div style='margin-top: 6px; font-size: 12px; color: #475569;'>
+Arus Awal: <b style='color: #0F172A;'>{pre_to:.1f} A</b> <span style='color: #D97706; font-size: 11px; font-weight: 700;'>(Kekurangan)</span>
+</div>
+<div style='font-size: 12px; color: #475569; margin-top: 2px;'>
+Tindakan: <b style='color: #15803D;'>🔺 Tambah {d_w:.1f} A</b>
+</div>
+<div style='margin-top: 6px; padding-top: 6px; border-top: 1px dashed {meta_to["border"]}; font-size: 12px; font-weight: 700; color: #15803D;'>
+Prognosa Akhir: {post_to:.1f} A ✅
+</div>
+</div>""", unsafe_allow_html=True)
+
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
         # B. Tabel Matriks Prognosa Fasa Lengkap (Sebelum vs Sesudah)
         st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 20px 0 8px 0;'>2. Tabel Matriks Prognosa Kondisi Fasa (Sebelum vs Sesudah)</div>", unsafe_allow_html=True)
@@ -2149,15 +2145,13 @@ elif menu_selection == "⚖️ Penyeimbangan Beban":
         jur_sorted = sorted(jur_data, key=lambda x: x['unb'], reverse=True) if jur_data else []
         worst_jur_text = f"Fokus utama pada <b>{jur_sorted[0]['jurusan']}</b> (penyumbang ketidakseimbangan terbesar: {jur_sorted[0]['unb']:.1f}%)." if jur_sorted else "Lakukan pada percabangan utama JTR gardu."
 
-        st.markdown(f"""
-            <div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 18px;'>
-                <div style='font-size: 13px; color: #334155; line-height: 1.6;'>
-                    <b>✅ Langkah 1 (Lokasi Jurusan):</b> {worst_jur_text}<br>
-                    <b>✅ Langkah 2 (Pemilihan Tiang):</b> Prioritaskan tiang awal (tiang 1 sampai 4 dari gardu distribusi) tempat tarikan arus pelanggan paling besar untuk penurunan losses yang maksimal.<br>
-                    <b>✅ Langkah 3 (Pelaksanaan Mutasi):</b> Identifikasi kabel SR pelanggan 1-fasa yang terpasang di fasa donor. Buka klem konektor (<i>piercing connector / tap</i>) pada fasa donor, lalu pasangkan ke fasa penerima secara bertahap sambil memonitor tang ampere.
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div style='background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 18px;'>
+<div style='font-size: 13px; color: #334155; line-height: 1.6;'>
+<b>✅ Langkah 1 (Lokasi Jurusan):</b> {worst_jur_text}<br>
+<b>✅ Langkah 2 (Pemilihan Tiang):</b> Prioritaskan tiang awal (tiang 1 sampai 4 dari gardu distribusi) tempat tarikan arus pelanggan paling besar untuk penurunan losses yang maksimal.<br>
+<b>✅ Langkah 3 (Pelaksanaan Mutasi):</b> Identifikasi kabel SR pelanggan 1-fasa yang terpasang di fasa donor. Buka klem konektor (<i>piercing connector / tap</i>) pada fasa donor, lalu pasangkan ke fasa penerima secara bertahap sambil memonitor tang ampere.
+</div>
+</div>""", unsafe_allow_html=True)
 
     # 7. Interactive "What-If" Simulator
     st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
