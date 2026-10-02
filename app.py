@@ -2256,42 +2256,34 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
         hist_raw = df_raw_full[df_raw_full['TF_Code'].astype(str).str.strip() == str(selected_code).strip()].copy()
         static_info = df[df['TF_Code'] == selected_code].iloc[0]
 
-        # Asset Passport Header Card
-        col_pass1, col_pass2 = st.columns([2, 1])
+        # Asset Passport Header Card (Full-width)
+        gmap_badge = ""
+        if pd.notna(static_info.get('latitude')) and pd.notna(static_info.get('longitude')):
+            lat = static_info['latitude']
+            lon = static_info['longitude']
+            gmap_badge = f"<a href='https://www.google.com/maps/search/?api=1&query={lat},{lon}' target='_blank' style='display:inline-flex; align-items:center; gap:5px; background:rgba(0,114,188,0.08); color:#0072BC; border:1px solid rgba(0,114,188,0.25); padding:4px 12px; border-radius:6px; font-size:12px; font-weight:600; text-decoration:none;'>🗺️ {lat:.6f}, {lon:.6f} (Google Maps ↗)</a>"
 
-        with col_pass1:
-            st.markdown(f"""
-                <div class='asset-card'>
+        st.markdown(f"""
+            <div class='asset-card'>
+                <div style='display: flex; justify-content: space-between; align-items: center;'>
                     <div style='font-size: 11px; font-weight: 700; color: #0072BC; text-transform: uppercase;'>PASPOR ASET TRANSFORMATOR</div>
-                    <div style='font-size: 24px; font-weight: 800; color: #0F172A; margin: 4px 0 12px 0;'>
-                        {static_info['TF_Name']} <span style='font-size:16px; color:#64748B;'>({selected_code})</span>
-                    </div>
-                    <div style='display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; font-size: 13px;'>
-                        <div><b>Unit Layanan:</b> {static_info.get('TF_Unit', '-')}</div>
-                        <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
-                        <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
-                        <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
-                        <div><b>Beban Terakhir:</b> {static_info.get('Load Percentage', '-')}%</div>
-                        <div><b>Unbalance:</b> {static_info.get('Unbalance (%)', '-')}%</div>
-                        <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg</div>
-                        <div><b>Daya Kontrak:</b> {float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA</div>
-                    </div>
+                    {gmap_badge}
                 </div>
-            """, unsafe_allow_html=True)
-
-        with col_pass2:
-            if pd.notna(static_info.get('latitude')) and pd.notna(static_info.get('longitude')):
-                lat = static_info['latitude']
-                lon = static_info['longitude']
-                st.markdown(f"""
-                    <div class='asset-card' style='text-align:center;'>
-                        <div style='font-size: 12px; color: #64748B;'>Koordinat Lokasi GPS</div>
-                        <div style='font-size: 14px; font-weight:700; color:#0F172A; margin: 6px 0;'>{lat:.6f}, {lon:.6f}</div>
-                        <a href='https://www.google.com/maps/search/?api=1&query={lat},{lon}' target='_blank' style='display:inline-block; background:#0072BC; color:white; padding:6px 14px; border-radius:6px; font-size:12px; font-weight:600; text-decoration:none;'>
-                            🗺️ Buka di Google Maps
-                        </a>
-                    </div>
-                """, unsafe_allow_html=True)
+                <div style='font-size: 24px; font-weight: 800; color: #0F172A; margin: 4px 0 12px 0;'>
+                    {static_info['TF_Name']} <span style='font-size:16px; color:#64748B;'>({selected_code})</span>
+                </div>
+                <div style='display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; font-size: 13px;'>
+                    <div><b>Unit Layanan:</b> {static_info.get('TF_Unit', '-')}</div>
+                    <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
+                    <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
+                    <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
+                    <div><b>Beban Terakhir:</b> {static_info.get('Load Percentage', '-')}%</div>
+                    <div><b>Unbalance:</b> {static_info.get('Unbalance (%)', '-')}%</div>
+                    <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg</div>
+                    <div><b>Daya Kontrak:</b> {float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
 
         # Prepare customer GIS and distance data
         pel_tf = pd.DataFrame()
@@ -2327,15 +2319,25 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                 avg_daya_va = pel_tf['DAYA'].mean()
 
                 if has_coords and valid_coords > 0:
-                    max_dist = pel_tf['dist_m'].max()
-                    avg_dist = pel_tf['dist_m'].mean()
-                    ujung_count = int((pel_tf['dist_m'] > 350).sum())
-                    pangkal_count = int((pel_tf['dist_m'] <= 150).sum())
+                    pel_jtr_valid = pel_tf[pel_tf['dist_m'] <= 3000]
+                    anomali_count = int((pel_tf['dist_m'] > 3000).sum())
+
+                    if not pel_jtr_valid.empty:
+                        max_dist = pel_jtr_valid['dist_m'].max()
+                        avg_dist = pel_jtr_valid['dist_m'].mean()
+                        ujung_count = int((pel_jtr_valid['dist_m'] > 350).sum())
+                        pangkal_count = int((pel_jtr_valid['dist_m'] <= 150).sum())
+                    else:
+                        max_dist = pel_tf['dist_m'].max()
+                        avg_dist = pel_tf['dist_m'].mean()
+                        ujung_count = int((pel_tf['dist_m'] > 350).sum())
+                        pangkal_count = 0
                 else:
                     max_dist = np.nan
                     avg_dist = np.nan
                     ujung_count = 0
                     pangkal_count = 0
+                    anomali_count = 0
 
                 # Top 4 GIS Metric Cards
                 col_g1, col_g2, col_g3, col_g4 = st.columns(4)
@@ -2356,18 +2358,19 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                         </div>
                     """, unsafe_allow_html=True)
                 with col_g3:
+                    anomali_badge = f"<div style='font-size: 10.5px; color: #EF4444; margin-top: 2px;'>*{anomali_count} Plg anomali GPS (>3km)</div>" if anomali_count > 0 else ""
                     st.markdown(f"""
                         <div class='kpi-card kpi-card-info' style='padding: 12px 14px;'>
                             <div class='kpi-title'>Jangkauan JTR Terjauh</div>
                             <div class='kpi-value' style='font-size: 22px; color: #0072BC;'>{f"{max_dist:.0f} m" if pd.notna(max_dist) else "-"}</div>
-                            <div class='kpi-desc'>Rata-rata radius: <b>{f"{avg_dist:.0f} m" if pd.notna(avg_dist) else "-"}</b></div>
+                            <div class='kpi-desc'>Rata-rata radius: <b>{f"{avg_dist:.0f} m" if pd.notna(avg_dist) else "-"}</b>{anomali_badge}</div>
                         </div>
                     """, unsafe_allow_html=True)
                 with col_g4:
                     is_ujung_alert = ujung_count > 0
                     st.markdown(f"""
                         <div class='kpi-card {"kpi-card-danger" if is_ujung_alert else "kpi-card-success"}' style='padding: 12px 14px;'>
-                            <div class='kpi-title'>Pelanggan Ujung (>350m)</div>
+                            <div class='kpi-title'>Pelanggan Ujung (350m - 3km)</div>
                             <div class='kpi-value' style='font-size: 22px; color: {"#EF4444" if is_ujung_alert else "#10B981"};'>{ujung_count} <span style='font-size: 13px; color: #64748B;'>Plg</span></div>
                             <div class='kpi-desc'>{"⚠️ Rawan Drop Tegangan" if is_ujung_alert else "🟢 Radius JTR Aman"}</div>
                         </div>
@@ -2429,10 +2432,13 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                         ('≥ 3500 VA', lambda d: d > 2200, '#EC4899', 12)
                     ]
 
-                    pel_plot = pel_tf[pel_tf['latitude'].notna() & pel_tf['longitude'].notna()].copy()
+                    # Focus map plot on local customers (<= 3000m) to keep map zoom tight and readable
+                    pel_plot = pel_tf[pel_tf['latitude'].notna() & pel_tf['longitude'].notna() & (pel_tf['dist_m'] <= 3000)].copy()
+                    if pel_plot.empty:
+                        pel_plot = pel_tf[pel_tf['latitude'].notna() & pel_tf['longitude'].notna()].copy()
                     pel_plot['dist_str'] = pel_plot['dist_m'].apply(lambda x: f"{x:.0f} m" if pd.notna(x) else "-")
                     pel_plot['zone_str'] = pel_plot['dist_m'].apply(
-                        lambda x: "Tiang Pangkal (≤150m)" if x <= 150 else ("Ujung JTR (>350m - Rawan Drop V)" if x > 350 else "JTR Menengah (150-350m)")
+                        lambda x: "Tiang Pangkal (≤150m)" if x <= 150 else ("Ujung JTR (>350m - Rawan Drop V)" if 350 < x <= 3000 else ("Luar JTR / Anomali (>3km)" if x > 3000 else "JTR Menengah (150-350m)"))
                     )
 
                     for label, cond, color, size in daya_categories:
@@ -2506,7 +2512,10 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                         </div>
                     """, unsafe_allow_html=True)
 
-                    farthest_df = pel_tf[pel_tf['dist_m'] > 350].sort_values(by='dist_m', ascending=False).head(15).copy()
+                    farthest_df = pel_tf[(pel_tf['dist_m'] > 350) & (pel_tf['dist_m'] <= 3000)].sort_values(by='dist_m', ascending=False).head(15).copy()
+                    if farthest_df.empty and ujung_count > 0:
+                        farthest_df = pel_tf[pel_tf['dist_m'] > 350].sort_values(by='dist_m', ascending=False).head(15).copy()
+
                     farthest_disp = pd.DataFrame({
                         'IDPEL': farthest_df['IDPEL'].astype(str),
                         'Daya (VA)': farthest_df['DAYA'].astype(int),
@@ -2516,6 +2525,8 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                         'Longitude': farthest_df['longitude'].round(6)
                     })
                     st.dataframe(farthest_disp, use_container_width=True, hide_index=True)
+                    if anomali_count > 0:
+                        st.caption(f"ℹ️ *Catatan:* Terdapat {anomali_count} pelanggan terdaftar dengan jarak GPS >3 km yang dikecualikan dari kalkulasi radius JTR di atas (kemungkinan kesalahan input koordinat atau relokasi pelanggan). Seluruh data tetap dapat dicari pada tabel rekapitulasi di bawah.")
 
                 # Searchable Customer Master Table & CSV Export
                 st.markdown("<div style='font-size: 15px; font-weight: 700; color: #0F172A; margin: 20px 0 8px 0;'>📋 Daftar Seluruh Pelanggan Tersambung</div>", unsafe_allow_html=True)
@@ -2541,7 +2552,7 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                     'IDPEL': pel_table_df['IDPEL'].astype(str),
                     'Daya (VA)': pel_table_df['DAYA'].astype(int),
                     'Jarak ke Trafo': pel_table_df['dist_m'].apply(lambda x: f"{x:.0f} m" if pd.notna(x) else "-") if 'dist_m' in pel_table_df.columns else "-",
-                    'Zona JTR': pel_table_df['dist_m'].apply(lambda x: "Pangkal (≤150m)" if x <= 150 else ("Ujung (>350m)" if x > 350 else "Menengah")) if 'dist_m' in pel_table_df.columns else "-",
+                    'Zona JTR': pel_table_df['dist_m'].apply(lambda x: "Pangkal (≤150m)" if x <= 150 else ("Ujung (350m-3km)" if 350 < x <= 3000 else ("Anomali GPS (>3km)" if x > 3000 else "Menengah (150-350m)"))) if 'dist_m' in pel_table_df.columns else "-",
                     'Latitude': pel_table_df['latitude'].apply(lambda x: f"{x:.6f}" if pd.notna(x) else "-"),
                     'Longitude': pel_table_df['longitude'].apply(lambda x: f"{x:.6f}" if pd.notna(x) else "-")
                 })
