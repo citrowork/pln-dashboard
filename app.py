@@ -424,21 +424,94 @@ def load_all_transformer_data():
             df_info['Total_Daya_kVA'] = 0.0
             df_info['Avg_Daya_VA'] = 0.0
 
-        # Deduplicate RAW_MEA to isolate the latest measurement per transformer
+        # Standardize transformer capacity and phase in df_info
+        df_info['TF_MLoad'] = pd.to_numeric(df_info['TF_MLoad'], errors='coerce').fillna(0)
+        df_info['TF_Phase'] = pd.to_numeric(df_info['TF_Phase'], errors='coerce').fillna(3).astype(int)
+
+        # Deduplicate RAW_MEA to isolate the latest measurement per transformer and calculate WBP/LWBP loads
         if not df_raw.empty:
             df_raw['TF_Code'] = df_raw['TF_Code'].astype(str).str.strip()
             df_raw['Parsed_Timestamp'] = pd.to_datetime(
                 df_raw['Date'].astype(str) + ' ' + df_raw['Time'].astype(str),
                 errors='coerce'
             )
+
+            # Extract hour for operational period classification (WBP vs LWBP)
+            def _extract_hour(ts, t_val):
+                if pd.notna(ts):
+                    return ts.hour
+                t_str = str(t_val).strip()
+                if ':' in t_str:
+                    try:
+                        return int(t_str.split(':')[0])
+                    except Exception:
+                        pass
+                return np.nan
+
+            df_raw['Hour'] = [
+                _extract_hour(ts, t) for ts, t in zip(df_raw['Parsed_Timestamp'], df_raw['Time'])
+            ]
+
+            # Map capacity and phase into df_raw for record-level electrical calculations
+            phase_map = df_info.set_index('TF_Code')['TF_Phase'].to_dict()
+            mload_map = df_info.set_index('TF_Code')['TF_MLoad'].to_dict()
+            df_raw['TF_Phase'] = df_raw['TF_Code'].map(phase_map).fillna(3).astype(int)
+            df_raw['TF_MLoad'] = df_raw['TF_Code'].map(mload_map).fillna(0).astype(float)
+
+            # Record-level currents (including ALA if available)
+            raw_arp = pd.to_numeric(df_raw['A_R_P'], errors='coerce').fillna(0)
+            raw_asp = pd.to_numeric(df_raw['A_S_P'], errors='coerce').fillna(0)
+            raw_atp = pd.to_numeric(df_raw['A_T_P'], errors='coerce').fillna(0)
+            if 'ALA_R_P' in df_raw.columns:
+                raw_arp += pd.to_numeric(df_raw['ALA_R_P'], errors='coerce').fillna(0)
+            if 'ALA_S_P' in df_raw.columns:
+                raw_asp += pd.to_numeric(df_raw['ALA_S_P'], errors='coerce').fillna(0)
+            if 'ALA_T_P' in df_raw.columns:
+                raw_atp += pd.to_numeric(df_raw['ALA_T_P'], errors='coerce').fillna(0)
+
+            # Standar Listrik PLN: Tegangan Nominal 230V
+            df_raw['Rec_Load_kVA'] = np.where(
+                df_raw['TF_Phase'] == 1,
+                ((230.0 * raw_arp) / 1000.0).round(2),
+                ((230.0 * (raw_arp + raw_asp + raw_atp)) / 1000.0).round(2)
+            )
+            df_raw['Rec_Load_Pct'] = np.where(
+                df_raw['TF_MLoad'] > 0,
+                ((df_raw['Rec_Load_kVA'] / df_raw['TF_MLoad']) * 100.0).round(1),
+                np.nan
+            )
+
             df_raw_sorted = df_raw.sort_values(by='Parsed_Timestamp', ascending=True)
             df_raw_latest = df_raw_sorted.drop_duplicates(subset=['TF_Code'], keep='last').copy()
+            df_raw_latest.drop(columns=['TF_Phase', 'TF_MLoad', 'Rec_Load_kVA', 'Rec_Load_Pct', 'Hour'], inplace=True, errors='ignore')
+
+            # Latest WBP measurement per transformer (17:00 - 23:59 WIT)
+            df_raw_wbp = df_raw_sorted[df_raw_sorted['Hour'] >= 17].drop_duplicates(subset=['TF_Code'], keep='last')
+            wbp_agg = df_raw_wbp[['TF_Code', 'Rec_Load_Pct', 'Rec_Load_kVA', 'Date', 'Time']].rename(columns={
+                'Rec_Load_Pct': 'Load_Pct_WBP',
+                'Rec_Load_kVA': 'Load_kVA_WBP',
+                'Date': 'Date_WBP',
+                'Time': 'Time_WBP'
+            })
+
+            # Latest LWBP measurement per transformer (00:00 - 16:59 WIT)
+            df_raw_lwbp = df_raw_sorted[df_raw_sorted['Hour'] < 17].drop_duplicates(subset=['TF_Code'], keep='last')
+            lwbp_agg = df_raw_lwbp[['TF_Code', 'Rec_Load_Pct', 'Rec_Load_kVA', 'Date', 'Time']].rename(columns={
+                'Rec_Load_Pct': 'Load_Pct_LWBP',
+                'Rec_Load_kVA': 'Load_kVA_LWBP',
+                'Date': 'Date_LWBP',
+                'Time': 'Time_LWBP'
+            })
         else:
             df_raw_latest = pd.DataFrame()
+            wbp_agg = pd.DataFrame(columns=['TF_Code', 'Load_Pct_WBP', 'Load_kVA_WBP', 'Date_WBP', 'Time_WBP'])
+            lwbp_agg = pd.DataFrame(columns=['TF_Code', 'Load_Pct_LWBP', 'Load_kVA_LWBP', 'Date_LWBP', 'Time_LWBP'])
 
-        # Merge Static info with latest measurements
+        # Merge Static info with latest measurements and period-specific aggregates
         df = pd.merge(df_info, df_raw_latest, on="TF_Code", how="left")
         df = df.dropna(subset=['TF_Name']).copy()
+        df = pd.merge(df, wbp_agg, on="TF_Code", how="left")
+        df = pd.merge(df, lwbp_agg, on="TF_Code", how="left")
 
         # Parse and clean coordinates
         if 'TF_Coordinate' in df.columns:
@@ -510,6 +583,14 @@ def load_all_transformer_data():
             np.nan
         )
 
+        # Formatted string representations for WBP and LWBP operational loads
+        df['Load Percentage (WBP)'] = df['Load_Pct_WBP'].apply(
+            lambda x: f"{x:.1f} %" if pd.notna(x) else "-"
+        )
+        df['Load Percentage (LWBP)'] = df['Load_Pct_LWBP'].apply(
+            lambda x: f"{x:.1f} %" if pd.notna(x) else "-"
+        )
+
         df['Load_Status'] = np.where(
             ~df['Is_Measured'],
             'Belum Diukur',
@@ -579,7 +660,10 @@ def load_all_transformer_data():
         priority_cols = [
             'TF_Code', 'TF_Name', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
             'Total_Pelanggan', 'Total_Daya_kVA', 'Avg_Daya_VA',
-            'Measurement_Status', 'Load_Status', 'Load Percentage', 'Current Load',
+            'Measurement_Status', 'Load_Status',
+            'Load Percentage (WBP)', 'Load Percentage (LWBP)',
+            'Load Percentage', 'Current Load',
+            'Load_Pct_WBP', 'Load_Pct_LWBP',
             'Unbalance_Status', 'Unbalance (%)', 'Health Score', 'Date', 'Time',
             'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'V_RN', 'V_SN', 'V_TN', 'TF_Coordinate'
         ]
@@ -1073,34 +1157,46 @@ if menu_selection == "📊 Dashboard Utama":
             map_zoom = 7.5
 
         try:
-            hover_dict = {
-                'TF_Code': True,
-                'TF_Unit': True,
-                'TF_MLoad': True,
-                'Load Percentage': True,
-                'Unbalance (%)': True,
-                'Map_Status': True,
-                'Date': True,
-                'Months_Since_Measurement': True,
-                'latitude': False,
-                'longitude': False
-            }
+            # Prepare clean and formatted tooltip metrics
+            map_df['Unb_Display'] = map_df['Unbalance (%)'].apply(lambda x: f"{x:.1f} %" if pd.notna(x) else "-")
+            map_df['Date_Display'] = map_df['Date'].fillna("-").astype(str)
+            map_df['Cap_Display'] = map_df['TF_MLoad'].apply(lambda x: f"{int(x) if x == int(x) else x} kVA" if pd.notna(x) and x > 0 else "-")
+            map_df['Unit_Display'] = map_df['TF_Unit'].fillna("-").astype(str)
+            map_df['Load_WBP_Display'] = map_df['Load Percentage (WBP)'].fillna("-").astype(str)
+            map_df['Load_LWBP_Display'] = map_df['Load Percentage (LWBP)'].fillna("-").astype(str)
+
+            custom_map_cols = [
+                'TF_Name', 'TF_Code', 'Unit_Display', 'Cap_Display',
+                'Load_WBP_Display', 'Load_LWBP_Display', 'Unb_Display',
+                'Map_Status', 'Date_Display'
+            ]
+
+            hovertemplate_map = (
+                "<b>%{customdata[0]}</b><br><br>"
+                "Kode Gardu : %{customdata[1]}<br>"
+                "Unit Layanan : %{customdata[2]}<br>"
+                "Kapasitas : %{customdata[3]}<br>"
+                "<b>Load Percentage (WBP) : %{customdata[4]}</b><br>"
+                "<b>Load Percentage (LWBP) : %{customdata[5]}</b><br>"
+                "Ketidakseimbangan : %{customdata[6]}<br>"
+                "Status : %{customdata[7]}<br>"
+                "Tanggal Ukur : %{customdata[8]}<extra></extra>"
+            )
 
             if hasattr(px, 'scatter_map'):
                 fig_map = px.scatter_map(
                     map_df,
                     lat='latitude',
                     lon='longitude',
-                    hover_name='TF_Name',
-                    hover_data=hover_dict,
                     color='Map_Status',
                     color_discrete_map=color_map,
+                    custom_data=custom_map_cols,
                     center=map_center,
                     zoom=map_zoom,
                     map_style="open-street-map",
                     height=450
                 )
-                fig_map.update_traces(marker=dict(size=9, opacity=0.9))
+                fig_map.update_traces(marker=dict(size=9, opacity=0.9), hovertemplate=hovertemplate_map)
                 fig_map.update_layout(
                     margin=dict(l=0, r=0, t=0, b=0),
                     map=dict(
@@ -1123,16 +1219,15 @@ if menu_selection == "📊 Dashboard Utama":
                     map_df,
                     lat='latitude',
                     lon='longitude',
-                    hover_name='TF_Name',
-                    hover_data=hover_dict,
                     color='Map_Status',
                     color_discrete_map=color_map,
+                    custom_data=custom_map_cols,
                     center=map_center,
                     zoom=map_zoom,
                     mapbox_style="open-street-map",
                     height=450
                 )
-                fig_map.update_traces(marker=dict(size=9, opacity=0.9))
+                fig_map.update_traces(marker=dict(size=9, opacity=0.9), hovertemplate=hovertemplate_map)
                 fig_map.update_layout(
                     margin=dict(l=0, r=0, t=0, b=0),
                     mapbox=dict(
@@ -2277,10 +2372,10 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                     <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
                     <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
                     <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
-                    <div><b>Beban Terakhir:</b> {static_info.get('Load Percentage', '-')}%</div>
-                    <div><b>Unbalance:</b> {static_info.get('Unbalance (%)', '-')}%</div>
-                    <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg</div>
-                    <div><b>Daya Kontrak:</b> {float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA</div>
+                    <div><b>Beban WBP:</b> {static_info.get('Load Percentage (WBP)', '-')}</div>
+                    <div><b>Beban LWBP:</b> {static_info.get('Load Percentage (LWBP)', '-')}</div>
+                    <div><b>Ketidakseimbangan:</b> {f"{static_info['Unbalance (%)']:.1f}%" if pd.notna(static_info.get('Unbalance (%)')) else "-"}</div>
+                    <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg ({float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA)</div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -2398,12 +2493,19 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                             textposition='top right',
                             textfont=dict(size=12, color='#0F172A'),
                             name=f"⚡ Gardu {selected_code}",
-                            customdata=[[selected_code, static_info['TF_Name'], static_info['TF_MLoad'], static_info.get('Load Percentage', 0)]],
+                            customdata=[[
+                                selected_code,
+                                static_info['TF_Name'],
+                                static_info['TF_MLoad'],
+                                static_info.get('Load Percentage (WBP)', '-'),
+                                static_info.get('Load Percentage (LWBP)', '-')
+                            ]],
                             hovertemplate="<b>⚡ GARDU DISTRIBUSI</b><br>" +
                                           "Kode: %{customdata[0]}<br>" +
                                           "Nama: %{customdata[1]}<br>" +
                                           "Kapasitas: %{customdata[2]} kVA<br>" +
-                                          "Beban: %{customdata[3]}%<extra></extra>"
+                                          "<b>Load Percentage (WBP) : %{customdata[3]}</b><br>" +
+                                          "<b>Load Percentage (LWBP) : %{customdata[4]}</b><extra></extra>"
                         ))
                     except Exception:
                         fig_map.add_trace(go.Scattermapbox(
@@ -2415,12 +2517,19 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                             textposition='top right',
                             textfont=dict(size=12, color='#0F172A'),
                             name=f"⚡ Gardu {selected_code}",
-                            customdata=[[selected_code, static_info['TF_Name'], static_info['TF_MLoad'], static_info.get('Load Percentage', 0)]],
+                            customdata=[[
+                                selected_code,
+                                static_info['TF_Name'],
+                                static_info['TF_MLoad'],
+                                static_info.get('Load Percentage (WBP)', '-'),
+                                static_info.get('Load Percentage (LWBP)', '-')
+                            ]],
                             hovertemplate="<b>⚡ GARDU DISTRIBUSI</b><br>" +
                                           "Kode: %{customdata[0]}<br>" +
                                           "Nama: %{customdata[1]}<br>" +
                                           "Kapasitas: %{customdata[2]} kVA<br>" +
-                                          "Beban: %{customdata[3]}%<extra></extra>"
+                                          "<b>Load Percentage (WBP) : %{customdata[3]}</b><br>" +
+                                          "<b>Load Percentage (LWBP) : %{customdata[4]}</b><extra></extra>"
                         ))
 
                     # Group customers by power category
@@ -2742,7 +2851,8 @@ elif menu_selection == "📋 Data Semua Trafo":
     show_cols = [
         'TF_Code', 'TF_Name', 'TF_Unit', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
         'Total_Pelanggan', 'Total_Daya_kVA',
-        'Measurement_Status', 'Load Percentage', 'Current Load', 'Unbalance (%)',
+        'Measurement_Status', 'Load Percentage (WBP)', 'Load Percentage (LWBP)',
+        'Load Percentage', 'Current Load', 'Unbalance (%)',
         'Health Score', 'Date', 'A_R_P', 'A_S_P', 'A_T_P', 'A_N_P', 'TF_Coordinate'
     ]
     show_cols = [c for c in show_cols if c in filtered_df.columns]
