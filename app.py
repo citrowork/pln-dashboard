@@ -658,7 +658,8 @@ def load_all_transformer_data():
 
         # Order key columns in front
         priority_cols = [
-            'TF_Code', 'TF_Name', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+            'TF_Code', 'TF_Name', 'TF_Unit', 'Penyulang', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+            'Tahun_Operasi', 'Standar_Konstruksi', 'Alamat_Lokasi', 'Status_Kepemilikan',
             'Total_Pelanggan', 'Total_Daya_kVA', 'Avg_Daya_VA',
             'Measurement_Status', 'Load_Status',
             'Load Percentage (WBP)', 'Load Percentage (LWBP)',
@@ -1162,11 +1163,12 @@ if menu_selection == "📊 Dashboard Utama":
             map_df['Date_Display'] = map_df['Date'].fillna("-").astype(str)
             map_df['Cap_Display'] = map_df['TF_MLoad'].apply(lambda x: f"{int(x) if x == int(x) else x} kVA" if pd.notna(x) and x > 0 else "-")
             map_df['Unit_Display'] = map_df['TF_Unit'].fillna("-").astype(str)
+            map_df['Feeder_Display'] = map_df['Penyulang'].fillna("-").astype(str) if 'Penyulang' in map_df.columns else "-"
             map_df['Load_WBP_Display'] = map_df['Load Percentage (WBP)'].fillna("-").astype(str)
             map_df['Load_LWBP_Display'] = map_df['Load Percentage (LWBP)'].fillna("-").astype(str)
 
             custom_map_cols = [
-                'TF_Name', 'TF_Code', 'Unit_Display', 'Cap_Display',
+                'TF_Name', 'TF_Code', 'Unit_Display', 'Feeder_Display', 'Cap_Display',
                 'Load_WBP_Display', 'Load_LWBP_Display', 'Unb_Display',
                 'Map_Status', 'Date_Display'
             ]
@@ -1175,12 +1177,13 @@ if menu_selection == "📊 Dashboard Utama":
                 "<b>%{customdata[0]}</b><br><br>"
                 "Kode Gardu : %{customdata[1]}<br>"
                 "Unit Layanan : %{customdata[2]}<br>"
-                "Kapasitas : %{customdata[3]}<br>"
-                "<b>Load Percentage (WBP) : %{customdata[4]}</b><br>"
-                "<b>Load Percentage (LWBP) : %{customdata[5]}</b><br>"
-                "Ketidakseimbangan : %{customdata[6]}<br>"
-                "Status : %{customdata[7]}<br>"
-                "Tanggal Ukur : %{customdata[8]}<extra></extra>"
+                "Penyulang : %{customdata[3]}<br>"
+                "Kapasitas : %{customdata[4]}<br>"
+                "<b>Load Percentage (WBP) : %{customdata[5]}</b><br>"
+                "<b>Load Percentage (LWBP) : %{customdata[6]}</b><br>"
+                "Ketidakseimbangan : %{customdata[7]}<br>"
+                "Status : %{customdata[8]}<br>"
+                "Tanggal Ukur : %{customdata[9]}<extra></extra>"
             )
 
             if hasattr(px, 'scatter_map'):
@@ -2369,13 +2372,17 @@ elif menu_selection == "📈 Riwayat & Dossier Trafo":
                 </div>
                 <div style='display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; font-size: 13px;'>
                     <div><b>Unit Layanan:</b> {static_info.get('TF_Unit', '-')}</div>
+                    <div><b>Penyulang:</b> {static_info.get('Penyulang', '-')}</div>
                     <div><b>Kapasitas:</b> {static_info['TF_MLoad']} kVA</div>
                     <div><b>Tipe Fasa:</b> {static_info['TF_Phase']} Fasa</div>
-                    <div><b>Konstruksi:</b> {static_info['TF_Construction']}</div>
+                    <div><b>Konstruksi:</b> {static_info['TF_Construction']} ({static_info.get('Standar_Konstruksi', '-')})</div>
+                    <div><b>Tahun Operasi:</b> {static_info.get('Tahun_Operasi', '-')}</div>
                     <div><b>Beban WBP:</b> {static_info.get('Load Percentage (WBP)', '-')}</div>
                     <div><b>Beban LWBP:</b> {static_info.get('Load Percentage (LWBP)', '-')}</div>
                     <div><b>Ketidakseimbangan:</b> {f"{static_info['Unbalance (%)']:.1f}%" if pd.notna(static_info.get('Unbalance (%)')) else "-"}</div>
                     <div><b>Total Pelanggan:</b> {int(static_info.get('Total_Pelanggan', 0))} Plg ({float(static_info.get('Total_Daya_kVA', 0)):.1f} kVA)</div>
+                    <div><b>Alamat / Lokasi:</b> {static_info.get('Alamat_Lokasi', '-')}</div>
+                    <div><b>Kepemilikan:</b> {static_info.get('Status_Kepemilikan', 'PLN')}</div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -2822,10 +2829,15 @@ elif menu_selection == "📋 Data Semua Trafo":
     # Apply Filters
     filtered_df = df.copy()
     if search_query:
-        filtered_df = filtered_df[
+        search_filter = (
             filtered_df['TF_Code'].str.contains(search_query, case=False, na=False) |
             filtered_df['TF_Name'].str.contains(search_query, case=False, na=False)
-        ]
+        )
+        if 'Penyulang' in filtered_df.columns:
+            search_filter = search_filter | filtered_df['Penyulang'].astype(str).str.contains(search_query, case=False, na=False)
+        if 'Alamat_Lokasi' in filtered_df.columns:
+            search_filter = search_filter | filtered_df['Alamat_Lokasi'].astype(str).str.contains(search_query, case=False, na=False)
+        filtered_df = filtered_df[search_filter]
     if 'TF_Unit' in filtered_df.columns and sel_unit != "Semua":
         filtered_df = filtered_df[filtered_df['TF_Unit'] == sel_unit]
     if sel_const != "Semua":
@@ -2849,7 +2861,8 @@ elif menu_selection == "📋 Data Semua Trafo":
 
     # Format Columns for Display
     show_cols = [
-        'TF_Code', 'TF_Name', 'TF_Unit', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+        'TF_Code', 'TF_Name', 'TF_Unit', 'Penyulang', 'TF_MLoad', 'TF_Phase', 'TF_Construction',
+        'Tahun_Operasi', 'Standar_Konstruksi', 'Alamat_Lokasi', 'Status_Kepemilikan',
         'Total_Pelanggan', 'Total_Daya_kVA',
         'Measurement_Status', 'Load Percentage (WBP)', 'Load Percentage (LWBP)',
         'Load Percentage', 'Current Load', 'Unbalance (%)',
