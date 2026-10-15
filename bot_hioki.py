@@ -106,8 +106,14 @@ Text to extract: {teks_laporan}
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
         ]
         
-        # E. Append ke Google Sheets
-        sheet.append_row(row_ke_sheets)
+        # E. Append ke Google Sheets secara deterministik (anti-overwrite)
+        last_row = len(sheet.col_values(1))
+        sheet.append_row(
+            row_ke_sheets,
+            value_input_option=gspread.utils.ValueInputOption.user_entered,
+            insert_data_option=gspread.utils.InsertDataOption.insert_rows,
+            table_range=f"A1:BY{max(last_row, 1)}"
+        )
         return True, "Data berhasil diekstrak dan disimpan ke databases."
         
     except Exception as e:

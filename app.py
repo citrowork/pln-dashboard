@@ -3168,7 +3168,14 @@ elif menu_selection == "📥 Input Pengukuran Gardu":
                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
                             ]
 
-                            sheet_raw.append_row(row_manual)
+                            # Tentukan baris tujuan riil secara deterministik (anti-overwrite)
+                            last_row = len(sheet_raw.col_values(1))
+                            sheet_raw.append_row(
+                                row_manual,
+                                value_input_option=gspread.utils.ValueInputOption.user_entered,
+                                insert_data_option=gspread.utils.InsertDataOption.insert_rows,
+                                table_range=f"A1:BY{max(last_row, 1)}"
+                            )
                             st.cache_data.clear()
                             st.session_state["upload_success_notification"] = f"✅ Berhasil! Pengukuran manual untuk gardu {curr_trafo['TF_Name']} ({selected_code}) telah dicatat di Google Sheets (RAW_MEA). Status SPLN kini terbarui."
                             st.rerun()
